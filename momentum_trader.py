@@ -327,43 +327,47 @@ class MarketAnalyzer:
         self.second_volume_history = deque(maxlen=60)
         
     def analyze_macro(self) -> Dict:
-        """거시적 시장 분석 (일/주/월봉)"""
+        """시장 추세 분석 (중단기 + 거시 혼합)"""
         try:
-            # 일봉 분석
-            daily = self.api.get_candles_days(MARKET, count=MACRO_LOOKBACK_DAYS + 1)
-            if len(daily) < 2:
-                return {'trend': 'neutral', 'score': 0, 'can_trade': True}
+            # 1. 일봉 분석 (최근 3일 중심)
+            daily = self.api.get_candles_days(MARKET, count=4)
+            daily_change = 0.0
+            if len(daily) >= 2:
+                daily_change = (daily[0]['trade_price'] - daily[1]['trade_price']) / daily[1]['trade_price']
             
-            # 최근 7일 변화율
-            latest_close = daily[0]['trade_price']
-            start_close = daily[-1]['opening_price']
-            daily_change = (latest_close - start_close) / start_close
+            # 2. 4시간봉 분석 (최근 24시간 추세)
+            h4 = self.api.get_candles_minutes(MARKET, unit=240, count=6)
+            h4_change = 0.0
+            if len(h4) >= 2:
+                h4_change = (h4[0]['trade_price'] - h4[-1]['opening_price']) / h4[-1]['opening_price']
             
-            # 주봉 분석
-            weekly = self.api.get_candles_weeks(MARKET, count=4)
-            weekly_change = 0.0
-            if len(weekly) >= 2:
-                weekly_change = (weekly[0]['trade_price'] - weekly[1]['trade_price']) / weekly[1]['trade_price']
+            # 3. 1시간봉 분석 (최근 6시간 추세 - 가장 민감)
+            h1 = self.api.get_candles_minutes(MARKET, unit=60, count=6)
+            h1_change = 0.0
+            if len(h1) >= 2:
+                h1_change = (h1[0]['trade_price'] - h1[-1]['opening_price']) / h1[-1]['opening_price']
+
+            # 4. 주봉/월봉 (장기 배경)
+            weekly = self.api.get_candles_weeks(MARKET, count=2)
+            weekly_change = (weekly[0]['trade_price'] - weekly[1]['trade_price']) / weekly[1]['trade_price'] if len(weekly) >= 2 else 0
+
+            # 종합 점수 계산 (중단기 가중치 강화)
+            # 1시간(40%) + 4시간(30%) + 1일(20%) + 주봉(10%)
+            score = h1_change * 0.4 + h4_change * 0.3 + daily_change * 0.2 + weekly_change * 0.1
             
-            # 월봉 분석
-            monthly = self.api.get_candles_months(MARKET, count=3)
-            monthly_change = 0.0
-            if len(monthly) >= 2:
-                monthly_change = (monthly[0]['trade_price'] - monthly[1]['trade_price']) / monthly[1]['trade_price']
+            # 추세 판단 기준 (더 유연하게 변경)
+            # h1_change가 매우 높으면(급반등) 다른 조건 무시하고 거래 허용 가능
+            rapid_recovery = h1_change > 0.01  # 최근 6시간 1% 이상 상승 시
             
-            # 종합 점수 계산 (가중치: 일 40%, 주 35%, 월 25%)
-            score = daily_change * 0.4 + weekly_change * 0.35 + monthly_change * 0.25
-            
-            # 추세 판단
-            if score < MACRO_MIN_CHANGE_RATE:
+            if score < MACRO_MIN_CHANGE_RATE and not rapid_recovery:
                 trend = 'bearish'
                 can_trade = False
-            elif score > MACRO_BULLISH_THRESHOLD:
+            elif score > MACRO_BULLISH_THRESHOLD or rapid_recovery:
                 trend = 'bullish'
                 can_trade = True
             else:
                 trend = 'neutral'
-                can_trade = True  # 중립장에서도 거래 가능
+                can_trade = True
             
             self.macro_trend = trend
             self.macro_score = score
@@ -373,13 +377,16 @@ class MarketAnalyzer:
                 'trend': trend,
                 'score': score,
                 'can_trade': can_trade,
+                'h1_change': h1_change,
+                'h4_change': h4_change,
                 'daily_change': daily_change,
-                'weekly_change': weekly_change,
-                'monthly_change': monthly_change
+                'rapid_recovery': rapid_recovery
             }
             
-            logger.info(f"📈 거시 분석 | 추세: {trend} | 점수: {score:.4f} | "
-                       f"일: {daily_change*100:.2f}% 주: {weekly_change*100:.2f}% 월: {monthly_change*100:.2f}%")
+            log_msg = f"📈 추세 분석 | {trend} (점수:{score:.4f}) | 1h:{h1_change*100:+.2f}% 4h:{h4_change*100:+.2f}% 일:{daily_change*100:+.2f}%"
+            if rapid_recovery:
+                log_msg += " | 🚀 단기 급반등 감지됨"
+            logger.info(log_msg)
             
             return result
             
