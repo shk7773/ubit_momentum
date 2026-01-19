@@ -62,6 +62,12 @@ SECOND_MOMENTUM_WINDOW = 12         # 초봉 모멘텀 윈도우 (개수)
 SECOND_MOMENTUM_THRESHOLD = 0.001   # 초봉 모멘텀 기준 (0.1% - 더 민감)
 SECOND_RAPID_RISE_THRESHOLD = 0.002 # 급등 판단 기준 (0.2%/5초)
 
+# === 단타 전문가 기법 (Pro Scalping) 파라미터 ===
+SHORT_TREND_WINDOW = 15             # 단기 추세 확인 (15분)
+SHORT_MOMENTUM_THRESHOLD = 0.005    # 단기 급반등 기준 (15분 내 0.5% 이상)
+VOL_INTENSITY_THRESHOLD = 2.0       # 수급 집중도 (평균 대비 2배 이상)
+BREAKOUT_VELOCITY = 0.001           # 분당 가격 가속도 (0.1%/min)
+
 # === 익절/손절 설정 ===
 INITIAL_STOP_LOSS = 0.005           # 초기 손절선 (0.5%)
 TRAILING_STOP_ACTIVATION = 0.003    # 트레일링 스탑 활성화 기준 (+0.3% 수익 시)
@@ -327,42 +333,38 @@ class MarketAnalyzer:
         self.second_volume_history = deque(maxlen=60)
         
     def analyze_macro(self) -> Dict:
-        """시장 추세 분석 (중단기 + 거시 혼합)"""
+        """시장 추세 분석 (초단기/중단기/거시 하이브리드)"""
         try:
-            # 1. 일봉 분석 (최근 3일 중심)
-            daily = self.api.get_candles_days(MARKET, count=4)
-            daily_change = 0.0
-            if len(daily) >= 2:
-                daily_change = (daily[0]['trade_price'] - daily[1]['trade_price']) / daily[1]['trade_price']
+            # 1. 초단기 분석 (15분봉/30분봉) - 전문가 기법 적용
+            m15 = self.api.get_candles_minutes(MARKET, unit=15, count=2)
+            m15_change = (m15[0]['trade_price'] - m15[1]['trade_price']) / m15[1]['trade_price'] if len(m15) >= 2 else 0
             
-            # 2. 4시간봉 분석 (최근 24시간 추세)
-            h4 = self.api.get_candles_minutes(MARKET, unit=240, count=6)
-            h4_change = 0.0
-            if len(h4) >= 2:
-                h4_change = (h4[0]['trade_price'] - h4[-1]['opening_price']) / h4[-1]['opening_price']
-            
-            # 3. 1시간봉 분석 (최근 6시간 추세 - 가장 민감)
-            h1 = self.api.get_candles_minutes(MARKET, unit=60, count=6)
-            h1_change = 0.0
-            if len(h1) >= 2:
-                h1_change = (h1[0]['trade_price'] - h1[-1]['opening_price']) / h1[-1]['opening_price']
+            m30 = self.api.get_candles_minutes(MARKET, unit=30, count=2)
+            m30_change = (m30[0]['trade_price'] - m30[1]['trade_price']) / m30[1]['trade_price'] if len(m30) >= 2 else 0
 
-            # 4. 주봉/월봉 (장기 배경)
-            weekly = self.api.get_candles_weeks(MARKET, count=2)
-            weekly_change = (weekly[0]['trade_price'] - weekly[1]['trade_price']) / weekly[1]['trade_price'] if len(weekly) >= 2 else 0
+            # 2. 중단기 분석 (1시간/4시간)
+            h1 = self.api.get_candles_minutes(MARKET, unit=60, count=2)
+            h1_change = (h1[0]['trade_price'] - h1[1]['trade_price']) / h1[1]['trade_price'] if len(h1) >= 2 else 0
 
-            # 종합 점수 계산 (중단기 가중치 강화)
-            # 1시간(40%) + 4시간(30%) + 1일(20%) + 주봉(10%)
-            score = h1_change * 0.4 + h4_change * 0.3 + daily_change * 0.2 + weekly_change * 0.1
+            h4 = self.api.get_candles_minutes(MARKET, unit=240, count=2)
+            h4_change = (h4[0]['trade_price'] - h4[1]['trade_price']) / h4[1]['trade_price'] if len(h4) >= 2 else 0
             
-            # 추세 판단 기준 (더 유연하게 변경)
-            # h1_change가 매우 높으면(급반등) 다른 조건 무시하고 거래 허용 가능
-            rapid_recovery = h1_change > 0.01  # 최근 6시간 1% 이상 상승 시
+            # 3. 일봉 (대세 확인)
+            daily = self.api.get_candles_days(MARKET, count=2)
+            daily_change = (daily[0]['trade_price'] - daily[1]['trade_price']) / daily[1]['trade_price'] if len(daily) >= 2 else 0
+
+            # 종합 점수 계산 (초단위/분단위 기법 적용 가중치)
+            # 15분(40%) + 30분(25%) + 1시간(15%) + 4시간(15%) + 1일(5%)
+            score = m15_change * 0.4 + m30_change * 0.25 + h1_change * 0.15 + h4_change * 0.15 + daily_change * 0.05
             
-            if score < MACRO_MIN_CHANGE_RATE and not rapid_recovery:
+            # [전문가 기법] 단기 수급 급전환 감지 (Aggressive Entry)
+            # 15분간 0.5% 이상 상승하면 거시 추세와 무시하고 단타 기회로 판단
+            short_squeeze = m15_change >= SHORT_MOMENTUM_THRESHOLD
+            
+            if score < MACRO_MIN_CHANGE_RATE and not short_squeeze:
                 trend = 'bearish'
                 can_trade = False
-            elif score > MACRO_BULLISH_THRESHOLD or rapid_recovery:
+            elif score > MACRO_BULLISH_THRESHOLD or short_squeeze:
                 trend = 'bullish'
                 can_trade = True
             else:
@@ -377,15 +379,13 @@ class MarketAnalyzer:
                 'trend': trend,
                 'score': score,
                 'can_trade': can_trade,
-                'h1_change': h1_change,
-                'h4_change': h4_change,
-                'daily_change': daily_change,
-                'rapid_recovery': rapid_recovery
+                'm15_change': m15_change,
+                'short_squeeze': short_squeeze
             }
             
-            log_msg = f"📈 추세 분석 | {trend} (점수:{score:.4f}) | 1h:{h1_change*100:+.2f}% 4h:{h4_change*100:+.2f}% 일:{daily_change*100:+.2f}%"
-            if rapid_recovery:
-                log_msg += " | 🚀 단기 급반등 감지됨"
+            log_msg = f"📊 추세 분석 | {trend} | 15m:{m15_change*100:+.2f}% 1h:{h1_change*100:+.2f}% 일:{daily_change*100:+.2f}%"
+            if short_squeeze:
+                log_msg += " | 🔥 단기 수급 폭발(Short Squeeze) 감지"
             logger.info(log_msg)
             
             return result
@@ -407,65 +407,59 @@ class MarketAnalyzer:
             self.second_volume_history.append(candle['candle_acc_trade_volume'])
     
     def detect_momentum(self, current_price: float) -> Dict:
-        """모멘텀 감지 (분봉 기반)"""
+        """모멘텀 감지 (분봉 기반 - 가속도 및 수급 интенсив성 분석)"""
         if len(self.minute_candles) < MOMENTUM_WINDOW:
-            return {'signal': False, 'strength': 0, 'reason': '분봉 데이터 부족'}
+            return {'signal': False, 'strength': 0, 'reason': '데이터 부족', 'price_change': 0, 'volume_ratio': 0}
         
         recent = list(self.minute_candles)[-MOMENTUM_WINDOW:]
         
-        # 1. 가격 모멘텀 계산 (분봉)
+        # 1. 가격 변화율 (전체 윈도우)
         price_change = (current_price - recent[0]['opening_price']) / recent[0]['opening_price']
         
-        # 2. 연속 상승 캔들 확인
+        # 2. 가격 가속도 (Velocity) - 최근 3분간의 변화
+        velocity = (current_price - recent[-3]['opening_price']) / 3 if len(recent) >= 3 else 0
+        velocity_pct = velocity / recent[-3]['opening_price'] if len(recent) >= 3 else 0
+        
+        # 3. 거래량 수급 분석
+        avg_volume = sum(self.volume_history) / len(self.volume_history) if self.volume_history else 0
+        recent_volume = recent[-1]['candle_acc_trade_volume']
+        volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 0
+        
+        # 4. 연속 상승 캔들
         up_count = 0
         for i in range(1, len(recent)):
             if recent[i]['trade_price'] > recent[i-1]['trade_price']:
                 up_count += 1
             else:
-                up_count = 0  # 연속성 깨지면 리셋
+                up_count = 0
         
-        # 3. 거래량 급등 확인
-        avg_volume = sum(self.volume_history) / len(self.volume_history) if self.volume_history else 0
-        recent_volume = recent[-1]['candle_acc_trade_volume']
-        volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 0
-        
-        # 4. 시그널 판단
+        # [전문가 판단 로직]
         momentum_ok = price_change >= MOMENTUM_THRESHOLD
         volume_ok = volume_ratio >= VOLUME_SPIKE_RATIO
+        velocity_ok = velocity_pct >= BREAKOUT_VELOCITY
         consecutive_ok = up_count >= CONSECUTIVE_UP_CANDLES
         
-        # 가격 안정성 체크 (급등락 필터)
-        high = max(c['high_price'] for c in recent)
-        low = min(c['low_price'] for c in recent)
-        volatility = (high - low) / low
-        stable = volatility < MIN_PRICE_STABILITY * 5  # 너무 변동성 크면 패스
-        
-        signal = momentum_ok and (volume_ok or consecutive_ok) and stable
-        
-        # 신호 강도 계산
+        # 강도 계산 (수급 및 가속도에 가중치)
         strength = 0
-        if momentum_ok:
-            strength += price_change / MOMENTUM_THRESHOLD * 30
-        if volume_ok:
-            strength += (volume_ratio - 1) * 20
-        if consecutive_ok:
-            strength += up_count * 10
+        if momentum_ok: strength += 30
+        if volume_ok: strength += (volume_ratio / VOLUME_SPIKE_RATIO) * 20
+        if velocity_ok: strength += (velocity_pct / BREAKOUT_VELOCITY) * 30
+        if consecutive_ok: strength += 20
         strength = min(strength, 100)
         
+        # 최종 신호: 모멘텀이 있고 (거래량이 터지거나 가속도가 붙었을 때)
+        signal = momentum_ok and (volume_ok or velocity_ok or consecutive_ok)
+        
         reason = []
-        if momentum_ok:
-            reason.append(f"분봉모멘텀 {price_change*100:.2f}%")
-        if volume_ok:
-            reason.append(f"거래량 {volume_ratio:.1f}배")
-        if consecutive_ok:
-            reason.append(f"연속상승 {up_count}개")
-        if not stable:
-            reason.append("변동성 과다")
-            
+        if velocity_ok: reason.append(f"가속도↑({velocity_pct*100:.2f}%)")
+        if volume_ok: reason.append(f"수급집중({volume_ratio:.1f}x)")
+        if momentum_ok: reason.append(f"모멘텀({price_change*100:.2f}%)")
+        
         return {
             'signal': signal,
             'strength': strength,
             'price_change': price_change,
+            'velocity': velocity_pct,
             'volume_ratio': volume_ratio,
             'up_count': up_count,
             'reason': ' / '.join(reason) if reason else '조건 미충족'
