@@ -40,56 +40,66 @@ from dotenv import load_dotenv
 # =================================================================================
 
 # === 투자 설정 ===
-MAX_INVESTMENT = 1_000_000          # 최대 투자금 (원)
+MAX_INVESTMENT = 10_000_000         # 최대 투자금 (원) - 1천만원으로 상향
 MIN_ORDER_AMOUNT = 5_000            # 최소 주문 금액 (업비트 최소금액 5,000원 + 버퍼)
 TRADING_FEE_RATE = 0.0005           # 거래 수수료 (0.05% = 0.0005)
 
+# === BTC 중심 시장 분석 (BTC-Centric Market Analysis) ===
+BTC_MARKET = "KRW-BTC"              # 비트코인 마켓 (시장 중심 지표)
+BTC_TREND_THRESHOLD = -0.005        # BTC 하락 임계값 (-0.5% 이하면 시장 위험)
+BTC_BULLISH_THRESHOLD = 0.003       # BTC 상승 임계값 (+0.3% 이상이면 시장 안정)
+BTC_CHECK_INTERVAL = 60             # BTC 추세 체크 주기 (초)
+
 # === 거시적 분석 (Macro Analysis) - 전체 시장 추세 ===
 MACRO_LOOKBACK_DAYS = 7             # 일봉 분석 기간 (일)
-MACRO_MIN_CHANGE_RATE = -0.02       # 전체 하락장 판단 기준 (-2% 이하면 관망)
-MACRO_BULLISH_THRESHOLD = 0.01     # 상승장 판단 기준 (+1% 이상)
+MACRO_MIN_CHANGE_RATE = -0.015      # 전체 하락장 판단 기준 (-1.5% 이하면 관망) - 강화
+MACRO_BULLISH_THRESHOLD = 0.015     # 상승장 판단 기준 (+1.5% 이상) - 강화
 MACRO_UPDATE_INTERVAL = 300         # 거시 분석 갱신 주기 (초)
 
-# === 미시적 분석 (Micro Analysis) - 진입 신호 ===
-MOMENTUM_WINDOW = 15                # 모멘텀 계산 윈도우 (캔들 개수) - 추세 신뢰도 강화
-MOMENTUM_THRESHOLD = 0.006          # 진입 모멘텀 기준 (0.6% 상승률) - 가짜 신호 필터링
-VOLUME_SPIKE_RATIO = 2.0            # 거래량 급등 배율 (평균 대비) - 수급 확인 강화
-CONSECUTIVE_UP_CANDLES = 4          # 연속 상승 캔들 개수 - 추세 지속성 확인
+# === 미시적 분석 (Micro Analysis) - 진입 신호 (대폭 강화) ===
+MOMENTUM_WINDOW = 20                # 모멘텀 계산 윈도우 (캔들 개수) - 20분으로 확대
+MOMENTUM_THRESHOLD = 0.012          # 진입 모멘텀 기준 (1.2% 상승률) - 가짜 신호 필터링 강화
+VOLUME_SPIKE_RATIO = 3.0            # 거래량 급등 배율 (평균 대비 3배) - 수급 확인 강화
+CONSECUTIVE_UP_CANDLES = 6          # 연속 상승 캔들 개수 - 6개로 강화
 
 # === 초봉 분석 (Second Candle Analysis) - 실시간 변화 감지 ===
 SECOND_CANDLE_UNIT = 5              # 초봉 단위 (1, 3, 5, 10, 30, 60 중 선택)
-SECOND_MOMENTUM_WINDOW = 12         # 초봉 모멘텀 윈도우 (개수)
-SECOND_MOMENTUM_THRESHOLD = 0.001   # 초봉 모멘텀 기준 (0.1% - 더 민감)
-SECOND_RAPID_RISE_THRESHOLD = 0.002 # 급등 판단 기준 (0.2%/5초)
+SECOND_MOMENTUM_WINDOW = 15         # 초봉 모멘텀 윈도우 (개수) - 확대
+SECOND_MOMENTUM_THRESHOLD = 0.002   # 초봉 모멘텀 기준 (0.2%) - 강화
+SECOND_RAPID_RISE_THRESHOLD = 0.006 # 급등 판단 기준 (0.6%/5초) - 노이즈 제거 강화
 
 # === 단타 전문가 기법 (Pro Scalping) 파라미터 ===
-SHORT_TREND_WINDOW = 15             # 단기 추세 확인 (15분)
-SHORT_MOMENTUM_THRESHOLD = 0.005    # 단기 급반등 기준 (15분 내 0.5% 이상)
-VOL_INTENSITY_THRESHOLD = 2.0       # 수급 집중도 (평균 대비 2배 이상)
-BREAKOUT_VELOCITY = 0.001           # 분당 가격 가속도 (0.1%/min)
+SHORT_TREND_WINDOW = 20             # 단기 추세 확인 (20분) - 확대
+SHORT_MOMENTUM_THRESHOLD = 0.008    # 단기 급반등 기준 (20분 내 0.8% 이상) - 강화
+VOL_INTENSITY_THRESHOLD = 2.5       # 수급 집중도 (평균 대비 2.5배 이상)
+BREAKOUT_VELOCITY = 0.0015          # 분당 가격 가속도 (0.15%/min) - 강화
 
 # === 익절/손절 설정 ===
-INITIAL_STOP_LOSS = 0.015           # 초기 손절선 (1.5%) - 변동성 고려 완화
-TRAILING_STOP_ACTIVATION = 0.01     # 트레일링 스탑 활성화 기준 (+1.0% 수익 시)
-TRAILING_STOP_DISTANCE = 0.008      # 트레일링 스탑 거리 (0.8% - 고점 대비)
-TAKE_PROFIT_TARGET = 0.01           # 목표 수익률 (1% - 트레일링으로 더 추적)
-MAX_HOLDING_TIME = 10800             # 최대 보유 시간 (초, 3시간)
+INITIAL_STOP_LOSS = 0.02            # 초기 손절선 (2%) - 변동성 고려 완화
+TRAILING_STOP_ACTIVATION = 0.015    # 트레일링 스탑 활성화 기준 (+1.5% 수익 시)
+TRAILING_STOP_DISTANCE = 0.01       # 트레일링 스탑 거리 (1% - 고점 대비)
+TAKE_PROFIT_TARGET = 0.02           # 목표 수익률 (2% - 트레일링으로 더 추적)
+MAX_HOLDING_TIME = 21600            # 최대 보유 시간 (초, 6시간으로 연장)
 
 # === 리스크 관리 ===
-MAX_TRADES_PER_HOUR = 10            # 시간당 최대 거래 횟수
-COOL_DOWN_AFTER_LOSS = 180          # 손절 후 대기 시간 (초)
-MIN_PRICE_STABILITY = 0.005         # 최소 가격 안정성 (급등락 필터)
+MAX_TRADES_PER_HOUR = 5             # 시간당 최대 거래 횟수 - 5회로 제한
+COOL_DOWN_AFTER_LOSS = 300          # 손절 후 대기 시간 (초) - 5분으로 연장
+MIN_PRICE_STABILITY = 0.008         # 최소 가격 안정성 (급등락 필터) - 강화
 
 # === 시스템 설정 ===
-# MARKET 상수는 초기값 또는 백업용으로 사용. 실제로는 동적으로 로드됨.
-MARKET = ["KRW-BTC"]  
-MARKET_UPDATE_INTERVAL = 600        # 마켓 목록 갱신 주기 (10분)
-TOP_MARKET_COUNT = 30               # 거래대금 상위 N개 선정
+# MARKET: 빈 배열([]) 이면 거래대금 상위 TOP_MARKET_COUNT개 자동 선정
+#         지정된 마켓이 있으면 해당 마켓만 트레이딩
+MARKET = ["KRW-BTC", "KRW-ETH", "KRW-XRP"]  # 빈 배열: 자동 선정, 예: ["KRW-BTC", "KRW-ETH"]
+MARKET_UPDATE_INTERVAL = 600        # 마켓 목록 갱신 주기 (10분) - 자동 모드에서만 사용
+TOP_MARKET_COUNT = 20               # 거래대금 상위 20개 선정 (집중도 상향)
 CANDLE_UNIT = 1                     # 분봉 단위 (1분)
 LOG_LEVEL = logging.INFO            # 로그 레벨
 DRY_RUN = True                      # 테스트 모드 (True: 실제 거래 X)
 USE_SECOND_CANDLES = True           # 초봉 사용 여부
-BALANCE_REPORT_INTERVAL = 30       # 잔고 리포트 주기 (초, 5분)
+BALANCE_REPORT_INTERVAL = 60        # 잔고 리포트 주기 (초, 1분)
+
+# === 거래 기록 설정 ===
+TRADE_LOG_FILE = "logs/trades.csv"  # 거래 기록 파일 경로
 
 # =================================================================================
 # 🔧 시스템 설정
@@ -729,7 +739,7 @@ class MarketAnalyzer:
             
         elif second_result['rapid_rise']:
             # 초봉 급등만 감지: 빠른 진입 (분봉 조건 완화)
-            if minute_result['price_change'] > MOMENTUM_THRESHOLD * 0.5:  # 분봉 조건 50%만 충족해도 OK
+            if minute_result['price_change'] > MOMENTUM_THRESHOLD * 0.8:  # 분봉 조건 80% 충족 필요 (기준 강화)
                 combined_signal = True
                 combined_strength = second_result['strength']
                 reasons.append(f"⚡빠른진입: {second_result['reason']}")
@@ -772,6 +782,22 @@ class MomentumTrader:
         # 자산 및 주문 (WebSocket 업데이트)
         self.active_orders = {} 
         
+        # === BTC 중심 시장 분석 ===
+        self.btc_trend = 'neutral'          # BTC 추세 (bullish/bearish/neutral)
+        self.btc_change_rate = 0.0          # BTC 1시간 변화율
+        self.last_btc_check = None          # 마지막 BTC 체크 시간
+        self.market_safe = True             # 시장 안전 여부 (BTC 기반)
+        
+        # === 누적 수익 추적 (전체) ===
+        self.cumulative_profit = 0.0        # 누적 수익 (원)
+        self.cumulative_trades = 0          # 누적 거래 횟수
+        self.cumulative_wins = 0            # 누적 수익 거래
+        self.cumulative_losses = 0          # 누적 손실 거래
+        self.start_time = datetime.now()    # 봇 시작 시간
+        
+        # 거래 로그 파일 초기화
+        self._init_trade_log()
+        
         # 초기 자산 로딩
         try:
              accounts = self.api.get_accounts()
@@ -784,10 +810,68 @@ class MomentumTrader:
                  }
         except Exception as e:
             logger.error(f"초기 자산 로딩 실패: {e}")
+    
+    def _init_trade_log(self):
+        """거래 로그 파일 초기화"""
+        import os
+        log_dir = os.path.dirname(TRADE_LOG_FILE)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+        
+        # 파일이 없으면 헤더 작성
+        if not os.path.exists(TRADE_LOG_FILE):
+            with open(TRADE_LOG_FILE, 'w', encoding='utf-8') as f:
+                f.write("timestamp,market,type,price,amount,volume,profit,profit_rate,cumulative_profit,reason\n")
+            logger.info(f"📝 거래 로그 파일 생성: {TRADE_LOG_FILE}")
+    
+    def _log_trade(self, market: str, trade_type: str, price: float, amount: float, 
+                   volume: float = 0, profit: float = 0, profit_rate: float = 0, reason: str = ""):
+        """거래 내역을 파일에 기록"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(TRADE_LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(f"{timestamp},{market},{trade_type},{price:.2f},{amount:.2f},{volume:.8f},{profit:.2f},{profit_rate:.4f},{self.cumulative_profit:.2f},{reason}\n")
+        except Exception as e:
+            logger.error(f"거래 로그 기록 실패: {e}")
 
     async def _update_top_markets(self):
-        """거래대금 상위 종목으로 마켓 리스트 갱신"""
+        """거래대금 상위 종목으로 마켓 리스트 갱신
+        - MARKET이 빈 배열이면: 자동으로 TOP_MARKET_COUNT개 선정
+        - MARKET이 지정되어 있으면: 해당 마켓만 사용
+        """
         try:
+            # === 수동 마켓 지정 모드 ===
+            if MARKET and len(MARKET) > 0:
+                # 지정된 마켓만 사용 (초기화 시 1회만 실행)
+                if not self.markets:
+                    new_markets = MARKET.copy()
+                    logger.info(f"🎯 수동 마켓 지정 모드: {len(new_markets)}개 종목")
+                    logger.info(f"   마켓: {new_markets}")
+                    
+                    # 마켓 초기화
+                    for market in new_markets:
+                        if market not in self.states:
+                            self.states[market] = TradingState(market)
+                        if market not in self.analyzers:
+                            self.analyzers[market] = MarketAnalyzer(self.api, market)
+                            
+                        try:
+                            self.analyzers[market].analyze_macro()
+                            candles = self.api.get_candles_minutes(market, CANDLE_UNIT, 200)
+                            self.analyzers[market].update_candles(candles)
+                            
+                            if USE_SECOND_CANDLES:
+                                sec_candles = self.api.get_candles_seconds(market, SECOND_MOMENTUM_WINDOW * 2)
+                                self.analyzers[market].update_second_candles(sec_candles)
+                                
+                            self.last_price_updates[market] = None
+                        except Exception as e:
+                            logger.error(f"[{market}] 초기 데이터 로딩 실패: {e}")
+                    
+                    self.markets = new_markets
+                return  # 수동 모드에서는 갱신 없음
+            
+            # === 자동 마켓 선정 모드 ===
             # 1. 모든 KRW 마켓 조회
             all_markets = self.api.get_all_markets()
             krw_markets = [m['market'] for m in all_markets if m['market'].startswith('KRW-')]
@@ -865,7 +949,7 @@ class MomentumTrader:
     async def start(self):
         """트레이딩 봇 시작"""
         logger.info("=" * 60)
-        logger.info("🚀 모멘텀 트레이딩 봇 시작")
+        logger.info("🚀 모멘텀 트레이딩 봇 시작 (BTC 중심 전략)")
         
         # 1. 마켓 리스트 구성 (가장 먼저 실행)
         await self._update_top_markets()
@@ -877,12 +961,17 @@ class MomentumTrader:
         logger.info(f"   타겟 마켓: {len(self.markets)}개 종목 (Top {TOP_MARKET_COUNT} + 보유)")
         logger.info(f"   최대 투자금: {MAX_INVESTMENT:,}원")
         logger.info(f"   테스트 모드: {'ON' if DRY_RUN else 'OFF'}")
+        logger.info(f"   📊 BTC 중심 시장 분석: 활성화")
+        logger.info(f"   📝 거래 기록 파일: {TRADE_LOG_FILE}")
         logger.info("=" * 60)
         
-        # 2. 초기 잔고 확인
+        # 2. 초기 BTC 추세 확인
+        await self._check_btc_trend()
+        
+        # 3. 초기 잔고 확인
         self._check_balance()
         
-        # 3. 기 보유 종목에 대한 상태 동기화
+        # 4. 기 보유 종목에 대한 상태 동기화
         self._sync_state_with_balance()
         
         self.running = True
@@ -894,7 +983,8 @@ class MomentumTrader:
                 self._trading_loop(),
                 self._macro_update_loop(),
                 self._balance_report_loop(),
-                self._market_update_loop()
+                self._market_update_loop(),
+                self._btc_monitor_loop()  # BTC 추세 모니터링 추가
             )
         except KeyboardInterrupt:
             logger.info("사용자에 의해 중단됨")
@@ -903,6 +993,48 @@ class MomentumTrader:
         finally:
             self.running = False
             self._print_summary()
+    
+    async def _check_btc_trend(self):
+        """BTC 추세 확인 (시장 중심 지표)"""
+        try:
+            # BTC 1시간봉으로 추세 확인
+            h1_candles = self.api.get_candles_minutes(BTC_MARKET, unit=60, count=2)
+            if len(h1_candles) >= 2:
+                btc_change = (h1_candles[0]['trade_price'] - h1_candles[1]['trade_price']) / h1_candles[1]['trade_price']
+                self.btc_change_rate = btc_change
+                
+                # 추세 판단
+                if btc_change <= BTC_TREND_THRESHOLD:
+                    self.btc_trend = 'bearish'
+                    self.market_safe = False
+                elif btc_change >= BTC_BULLISH_THRESHOLD:
+                    self.btc_trend = 'bullish'
+                    self.market_safe = True
+                else:
+                    self.btc_trend = 'neutral'
+                    self.market_safe = True  # neutral에서는 거래 허용
+                
+                self.last_btc_check = datetime.now()
+                
+                # 로그 출력
+                trend_emoji = "🟢" if self.btc_trend == 'bullish' else ("🔴" if self.btc_trend == 'bearish' else "🟡")
+                safe_status = "✅ 진입가능" if self.market_safe else "⛔ 진입중단"
+                logger.info(f"[{BTC_MARKET}] {trend_emoji} BTC 추세: {self.btc_trend.upper()} | "
+                          f"1시간 변화: {Color.YELLOW}{btc_change*100:+.2f}%{Color.RESET} | {safe_status}")
+                
+        except Exception as e:
+            logger.error(f"BTC 추세 확인 오류: {e}")
+            # 오류 시에도 안전하게 처리
+            self.market_safe = True  # 오류 시 거래 허용 (보수적)
+    
+    async def _btc_monitor_loop(self):
+        """BTC 추세 주기적 모니터링"""
+        while self.running:
+            await asyncio.sleep(BTC_CHECK_INTERVAL)
+            try:
+                await self._check_btc_trend()
+            except Exception as e:
+                logger.error(f"BTC 모니터링 루프 오류: {e}")
 
     async def _balance_report_loop(self):
         """주기적인 잔고 및 보유 종목 리포트"""
@@ -1133,6 +1265,16 @@ class MomentumTrader:
         
         while self.running:
             try:
+                # === BTC 안전 체크 (시장 중심 지표) ===
+                if not self.market_safe:
+                    # BTC가 하락 중이면 신규 진입 중단 (기존 포지션은 관리)
+                    for market in self.markets:
+                        state = self.states[market]
+                        if state.has_position():
+                            await self._manage_position(market)
+                    await asyncio.sleep(1)
+                    continue
+                
                 # 모든 마켓에 대해 반복
                 for market in self.markets:
                     current_price = self.current_prices.get(market, 0)
@@ -1155,10 +1297,19 @@ class MomentumTrader:
                         # 진입 기회 탐색
                         await self._find_entry(market)
                     
-                # 30초마다 분석 상태 로그
+                # 30초마다 분석 상태 로그 + 누적 수익률
                 now = time.time()
                 if now - last_status_log >= 30:
                     last_status_log = now
+                    
+                    # === 누적 수익률 출력 ===
+                    runtime = datetime.now() - self.start_time
+                    runtime_str = str(runtime).split('.')[0]  # 소수점 제거
+                    profit_color = Color.GREEN if self.cumulative_profit >= 0 else Color.RED
+                    logger.info(f"💰 누적 수익: {profit_color}{self.cumulative_profit:+,.0f}원{Color.RESET} | "
+                              f"거래: {self.cumulative_trades}회 (승:{self.cumulative_wins}/패:{self.cumulative_losses}) | "
+                              f"실행시간: {runtime_str}")
+                    
                     for market in self.markets:
                         price = self.current_prices.get(market, 0)
                         if price <= 0: continue
@@ -1294,6 +1445,10 @@ class MomentumTrader:
                 state.trailing_active = False
                 
                 state.record_trade('buy', invest_amount, state.entry_price)
+                
+                # 거래 로그 파일에 기록
+                volume = state.position.get('volume', 0)
+                self._log_trade(market, 'BUY', state.entry_price, invest_amount, volume, reason="진입")
                 
                 logger.info(f"[{Color.BOLD}{market}{Color.RESET}] ✅ 매수 체결 | 가격: {Color.YELLOW}{state.entry_price:,.0f}원{Color.RESET} | "
                           f"손절가: {Color.RED}{state.stop_loss_price:,.0f}원{Color.RESET} | "
@@ -1515,15 +1670,29 @@ class MomentumTrader:
             # 상태 기록
             state.record_trade(reason, sell_amount, executed_price, profit)
             
+            # === 누적 수익 업데이트 ===
+            self.cumulative_profit += profit
+            self.cumulative_trades += 1
+            if profit >= 0:
+                self.cumulative_wins += 1
+            else:
+                self.cumulative_losses += 1
+            
+            # 거래 로그 파일에 기록
+            self._log_trade(market, 'SELL', executed_price, sell_amount, volume, profit, profit_rate/100, reason)
+            
             # 포지션 정리
             state.position = None
             state.trailing_active = False
             
             emoji = "🎉" if profit >= 0 else "📉"
             pnl_color = Color.GREEN if profit >= 0 else Color.RED
+            cum_color = Color.GREEN if self.cumulative_profit >= 0 else Color.RED
             logger.info(f"[{Color.BOLD}{market}{Color.RESET}] {emoji} 매도 완료 | 사유: {reason} | "
                        f"수익: {pnl_color}{profit:+,.0f}원 ({profit_rate:+.2f}%){Color.RESET} | "
                        f"매도가: {Color.YELLOW}{executed_price:,.0f}원{Color.RESET}")
+            logger.info(f"💰 누적 수익: {cum_color}{self.cumulative_profit:+,.0f}원{Color.RESET} | "
+                       f"총 {self.cumulative_trades}회 거래 (승:{self.cumulative_wins}/패:{self.cumulative_losses})")
             
         except Exception as e:
             logger.error(f"[{market}] 매도 실행 오류: {e}")
@@ -1535,15 +1704,20 @@ class MomentumTrader:
         losing_trades = 0
         total_profit = 0.0
         
+        runtime = datetime.now() - self.start_time
+        runtime_str = str(runtime).split('.')[0]
+        
         logger.info("=" * 60)
         logger.info("📊 전체 거래 요약")
+        logger.info(f"   실행 시간: {runtime_str}")
         logger.info("=" * 60)
         
         for market in self.markets:
             state = self.states[market]
-            logger.info(f"--- {market} ---")
-            logger.info(f"   거래: {state.total_trades}회 (승:{state.winning_trades}/패:{state.losing_trades})")
-            logger.info(f"   수익: {state.total_profit:+,.0f}원")
+            if state.total_trades > 0:  # 거래가 있는 마켓만 출력
+                logger.info(f"--- {market} ---")
+                logger.info(f"   거래: {state.total_trades}회 (승:{state.winning_trades}/패:{state.losing_trades})")
+                logger.info(f"   수익: {state.total_profit:+,.0f}원")
             
             total_trades += state.total_trades
             winning_trades += state.winning_trades
@@ -1555,6 +1729,7 @@ class MomentumTrader:
         win_rate = (winning_trades / max(total_trades, 1) * 100)
         logger.info(f"   전체 승률: {win_rate:.1f}%")
         logger.info(f"   총 수익: {total_profit:+,.0f}원")
+        logger.info(f"   누적 수익 (세션): {self.cumulative_profit:+,.0f}원")
         logger.info("=" * 60)
 
 
