@@ -143,6 +143,7 @@ tail -f trading.log
 | `MARKET` | KRW-BTC | 거래 대상 코인입니다. |
 | `DRY_RUN` | True | **실제 거래 여부**: True면 주문을 내지 않는 테스트 모드입니다. |
 | `MAX_TRADES_PER_HOUR` | 10 | 과도한 거래 방지를 위한 시간당 최대 거래 횟수 제한입니다. |
+| `BALANCE_REPORT_INTERVAL` | 300 | **잔고 리포트 주기**: 5분마다 보유 종목과 잔고 현황을 로그로 출력합니다. |
 
 ## 📊 로그 해석
 

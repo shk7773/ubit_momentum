@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from collections import deque
-from urllib.parse import urlencode
+from urllib.parse import urlencode, unquote
 
 import jwt
 import requests
@@ -69,11 +69,11 @@ VOL_INTENSITY_THRESHOLD = 2.0       # 수급 집중도 (평균 대비 2배 이�
 BREAKOUT_VELOCITY = 0.001           # 분당 가격 가속도 (0.1%/min)
 
 # === 익절/손절 설정 ===
-INITIAL_STOP_LOSS = 0.005           # 초기 손절선 (0.5%)
-TRAILING_STOP_ACTIVATION = 0.003    # 트레일링 스탑 활성화 기준 (+0.3% 수익 시)
-TRAILING_STOP_DISTANCE = 0.004      # 트레일링 스탑 거리 (0.4% - 고점 대비)
+INITIAL_STOP_LOSS = 0.015           # 초기 손절선 (1.5%) - 변동성 고려 완화
+TRAILING_STOP_ACTIVATION = 0.01     # 트레일링 스탑 활성화 기준 (+1.0% 수익 시)
+TRAILING_STOP_DISTANCE = 0.008      # 트레일링 스탑 거리 (0.8% - 고점 대비)
 TAKE_PROFIT_TARGET = 0.01           # 목표 수익률 (1% - 트레일링으로 더 추적)
-MAX_HOLDING_TIME = 1800             # 최대 보유 시간 (초, 30분)
+MAX_HOLDING_TIME = 10800             # 최대 보유 시간 (초, 3시간)
 
 # === 리스크 관리 ===
 MAX_TRADES_PER_HOUR = 10            # 시간당 최대 거래 횟수
@@ -81,11 +81,15 @@ COOL_DOWN_AFTER_LOSS = 180          # 손절 후 대기 시간 (초)
 MIN_PRICE_STABILITY = 0.005         # 최소 가격 안정성 (급등락 필터)
 
 # === 시스템 설정 ===
-MARKET = ["KRW-BTC", "KRW-XRP"]  # 거래 마켓 (리스트 지원)
+# MARKET 상수는 초기값 또는 백업용으로 사용. 실제로는 동적으로 로드됨.
+MARKET = ["KRW-BTC"]  
+MARKET_UPDATE_INTERVAL = 600        # 마켓 목록 갱신 주기 (10분)
+TOP_MARKET_COUNT = 30               # 거래대금 상위 N개 선정
 CANDLE_UNIT = 1                     # 분봉 단위 (1분)
 LOG_LEVEL = logging.INFO            # 로그 레벨
 DRY_RUN = True                      # 테스트 모드 (True: 실제 거래 X)
 USE_SECOND_CANDLES = True           # 초봉 사용 여부
+BALANCE_REPORT_INTERVAL = 30       # 잔고 리포트 주기 (초, 5분)
 
 # =================================================================================
 # 🔧 시스템 설정
@@ -112,6 +116,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class Color:
+    """ANSI 색상 코드"""
+    RESET = "\033[0m"
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    MAGENTA = "\033[95m"
+    CYAN = "\033[96m"
+    BOLD = "\033[1m"
+
 class UpbitAPI:
     """업비트 REST API 클라이언트"""
     
@@ -120,17 +135,24 @@ class UpbitAPI:
         self.secret_key = secret_key
         self.session = requests.Session()
         
-    def _generate_jwt(self, query: Optional[Dict] = None) -> str:
+    def _generate_jwt(self, query: Optional[Dict] = None, query_string: Optional[str] = None) -> str:
         """JWT 토큰 생성"""
         payload = {
             'access_key': self.access_key,
             'nonce': str(uuid.uuid4()),
         }
         
-        if query:
-            query_string = urlencode(query).encode()
+        if query_string:
+             # 이미 생성된 쿼리 스트링이 있는 경우 (그대로 사용)
             m = hashlib.sha512()
-            m.update(query_string)
+            m.update(query_string.encode())
+            payload['query_hash'] = m.hexdigest()
+            payload['query_hash_alg'] = 'SHA512'
+        elif query:
+            # 딕셔너리로 넘겨받은 경우 (unquote 적용하여 표준 준수)
+            q_str = unquote(urlencode(query)).encode()
+            m = hashlib.sha512()
+            m.update(q_str)
             payload['query_hash'] = m.hexdigest()
             payload['query_hash_alg'] = 'SHA512'
             
@@ -143,32 +165,71 @@ class UpbitAPI:
         url = f"{REST_BASE_URL}{endpoint}"
         headers = {}
         
-        if params or data:
-            token = self._generate_jwt(params or data)
+        if method == 'GET' or method == 'DELETE':
+            if params:
+                # GET/DELETE 요청:
+                # 1. URL용: 인코딩된 쿼리 스트링 (예: time=...%3A... / states%5B%5D=done&states%5B%5D=cancel)
+                # doseq=True: 리스트 파라미터 처리 (states[]=['done', 'cancel'] -> states[]=done&states[]=cancel)
+                query_string = urlencode(params, doseq=True)
+                # 2. 해시용: 디코딩된 쿼리 스트링 (예: time=...:...) - Upbit 표준
+                hash_string = unquote(query_string)
+                
+                token = self._generate_jwt(query_string=hash_string)
+                headers['Authorization'] = f"Bearer {token}"
+                url = f"{url}?{query_string}"
+            else:
+                token = self._generate_jwt()
+                headers['Authorization'] = f"Bearer {token}"
+        elif params or data:
+            # POST 데이터 처리
+            token = self._generate_jwt(query=params or data)
             headers['Authorization'] = f"Bearer {token}"
         elif endpoint.startswith('/orders') or endpoint == '/accounts':
             token = self._generate_jwt()
             headers['Authorization'] = f"Bearer {token}"
             
-        try:
-            if method == 'GET':
-                response = self.session.get(url, params=params, headers=headers)
-            elif method == 'POST':
-                headers['Content-Type'] = 'application/json; charset=utf-8'
-                response = self.session.post(url, json=data, headers=headers)
-            elif method == 'DELETE':
-                response = self.session.delete(url, params=params, headers=headers)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
+        for attempt in range(4):
+            try:
+                if method == 'GET':
+                    # URL에 이미 쿼리 스트링이 포함되어 있으므로 params=None
+                    response = self.session.get(url, headers=headers)
+                elif method == 'POST':
+                    headers['Content-Type'] = 'application/json; charset=utf-8'
+                    response = self.session.post(url, json=data, headers=headers)
+                elif method == 'DELETE':
+                    # URL에 이미 쿼리 스트링이 포함되어 있으므로 params=None
+                    response = self.session.delete(url, headers=headers)
+                else:
+                    raise ValueError(f"Unsupported method: {method}")
                 
-            response.raise_for_status()
-            return response.json()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API 요청 실패: {e}")
-            if hasattr(e, 'response') and e.response:
-                logger.error(f"응답: {e.response.text}")
-            raise
+                # Rate Limit handling
+                if response.status_code == 429:
+                    wait_time = 0.5 * (2 ** attempt)
+                    logger.warning(f"API 요청 빈도 제한(429). {wait_time}초 대기 후 재시도... ({attempt+1}/3)")
+                    time.sleep(wait_time)
+                    continue
+                    
+                response.raise_for_status()
+                # 요청 간 최소 간격 유지 (Throttling) - Rate Limit 방지 강화
+                time.sleep(0.2)
+                return response.json()
+                
+            except requests.exceptions.RequestException as e:
+                # 429가 아닌 다른 오류나 마지막 재시도 실패 시
+                if attempt == 3 or (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429):
+                    logger.error(f"API 요청 실패: {e}")
+                    if hasattr(e, 'response') and e.response:
+                         logger.error(f"응답: {e.response.text}")
+                    raise
+                # 429 외의 일시적 오류일 수도 있으나, 여기서는 429 처리 위주로 구성
+                # 만약 RequestException이 response를 포함하고 429라면 위 loop에서 처리됨(status_code check가 먼저)
+                # 하지만 raise_for_status()에서 예외 발생 시 여기로 오므로, 429 체크 필요
+                if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
+                     wait_time = 0.5 * (2 ** attempt)
+                     logger.warning(f"API 요청 빈도 제한(429) - 예외 발생. {wait_time}초 대기 후 재시도... ({attempt+1}/3)")
+                     time.sleep(wait_time)
+                     continue
+                raise
             
     def get_accounts(self) -> List[Dict]:
         """계정 잔고 조회"""
@@ -243,11 +304,43 @@ class UpbitAPI:
         """주문 가능 정보 조회"""
         return self._request('GET', '/orders/chance', params={'market': market})
 
+    def get_all_markets(self) -> List[Dict]:
+        """모든 마켓 코드 조회"""
+        return self._request('GET', '/market/all')
+
+    def get_closed_orders(self, market: str, limit: int = 100, start_time: Optional[str] = None, end_time: Optional[str] = None, states: Optional[List[str]] = None) -> List[Dict]:
+        """종료된 주문 조회 (최근 체결 내역 확인용)
+        - start_time: 조회 시작 시각 (예: '2023-01-01T00:00:00+09:00')
+        - end_time: 조회 끝 시각
+        - limit: 요청 개수 (1~1000)
+        - states: 조회할 주문 상태 리스트 (예: ['done', 'cancel']) - 미지정 시 API 기본값(done, cancel 모두)
+        """
+        params = {
+            'market': market,
+            'order_by': 'desc',
+            'limit': limit
+        }
+        
+        # states 파라미터 처리 (리스트인 경우 반복 파라미터로 변환 필요하지만 requests가 처리해줌, 단 Upbit는 states[] 키 필요)
+        if states:
+            params['states[]'] = states
+        else:
+             # 명시적으로 지정하지 않으면 done만 가져오는게 아니라, done/cancel 모두 가져오기 위해 states[] 파라미터 사용 권장
+             params['states[]'] = ['done', 'cancel']
+
+        if start_time:
+            params['start_time'] = start_time
+        if end_time:
+            params['end_time'] = end_time
+            
+        return self._request('GET', '/orders/closed', params=params)
+
 
 class TradingState:
     """거래 상태 관리"""
     
-    def __init__(self):
+    def __init__(self, market: str = "Unknown"):
+        self.market = market
         self.position = None              # 현재 포지션 정보
         self.entry_price = 0.0            # 진입 가격
         self.entry_time = None            # 진입 시간
@@ -661,71 +754,136 @@ class MomentumTrader:
     """모멘텀 트레이딩 봇"""
     
     def __init__(self):
-        if not ACCESS_KEY or not SECRET_KEY:
-            raise ValueError("API 키가 설정되지 않았습니다. .env 파일을 확인하세요.")
-            
+        self.access_key = ACCESS_KEY
+        self.secret_key = SECRET_KEY
         self.api = UpbitAPI(ACCESS_KEY, SECRET_KEY)
         
-        # MARKET이 문자열이면 리스트로 변환, 리스트면 그대로 사용
-        self.markets = [MARKET] if isinstance(MARKET, str) else MARKET
+        # 동적 관리
+        self.markets = []  
+        self.states = {}     # {market: TradingState}
+        self.analyzers = {}  # {market: MarketAnalyzer}
+        self.assets = {}     # {currency: {balance, locked, avg_buy_price}}
         
-        # 시장별 상태 관리
-        self.analyzers = {market: MarketAnalyzer(self.api, market) for market in self.markets}
-        self.states = {market: TradingState() for market in self.markets}
+        self.current_prices = {} 
+        self.last_price_updates = {}
         
-        self.running = False
-        
-        # 현재 가격 추적 (시장별)
-        self.current_prices = {market: 0.0 for market in self.markets}
-        self.last_price_updates = {market: None for market in self.markets}
+        self.running = True
         
         # 자산 및 주문 (WebSocket 업데이트)
-        self.assets = {'KRW': {'balance': 0.0, 'locked': 0.0}, 'BTC': {'balance': 0.0, 'locked': 0.0}, 'XRP': {'balance': 0.0, 'locked': 0.0}}
-        self.active_orders = {} # uuid -> order_info
+        self.active_orders = {} 
         
-        # 초기 자산 로딩 (REST API 1회)
+        # 초기 자산 로딩
         try:
              accounts = self.api.get_accounts()
              for acc in accounts:
                  cur = acc['currency']
                  self.assets[cur] = {
                      'balance': float(acc['balance']),
-                     'locked': float(acc['locked'])
+                     'locked': float(acc['locked']),
+                     'avg_buy_price': float(acc['avg_buy_price'])
                  }
         except Exception as e:
             logger.error(f"초기 자산 로딩 실패: {e}")
-        
+
+    async def _update_top_markets(self):
+        """거래대금 상위 종목으로 마켓 리스트 갱신"""
+        try:
+            # 1. 모든 KRW 마켓 조회
+            all_markets = self.api.get_all_markets()
+            krw_markets = [m['market'] for m in all_markets if m['market'].startswith('KRW-')]
+            
+            # 2. 현재가 및 거래대금 조회
+            tickers = []
+            chunk_size = 100
+            for i in range(0, len(krw_markets), chunk_size):
+                chunk = krw_markets[i:i+chunk_size]
+                if not chunk: break
+                tickers.extend(self.api.get_ticker(','.join(chunk)))
+                time.sleep(0.1) # Rate limit safe
+            
+            # 3. 24시간 거래대금 기준 정렬
+            sorted_tickers = sorted(tickers, key=lambda x: x['acc_trade_price_24h'], reverse=True)
+            top_markets = [t['market'] for t in sorted_tickers[:TOP_MARKET_COUNT]]
+            
+            # 4. 현재 보유 중인 종목은 무조건 포함
+            held_markets = []
+            for market, state in self.states.items():
+                if state.has_position():
+                    held_markets.append(market)
+            
+            # 5. 최종 마켓 리스트 병합 (중복 제거)
+            new_markets = list(set(top_markets + held_markets))
+            
+            # 6. 변경 사항 적용
+            added_markets = [m for m in new_markets if m not in self.markets]
+            removed_markets = [m for m in self.markets if m not in new_markets]
+            
+            if added_markets or removed_markets:
+                logger.info(f"🔄 마켓 리스트 갱신 (총 {len(new_markets)}개)")
+                if added_markets:
+                    logger.info(f"   ➕ 추가: {added_markets}")
+                if removed_markets:
+                    logger.info(f"   ➖ 제외: {removed_markets}")
+                
+                # 추가된 마켓 초기화
+                for market in added_markets:
+                    if market not in self.states:
+                        self.states[market] = TradingState(market)
+                    if market not in self.analyzers:
+                        self.analyzers[market] = MarketAnalyzer(self.api, market)
+                        
+                    # 초기 데이터 로딩 (캔들, 거시분석)
+                    try:
+                        self.analyzers[market].analyze_macro()
+                        candles = self.api.get_candles_minutes(market, CANDLE_UNIT, 200)
+                        self.analyzers[market].update_candles(candles)
+                        
+                        if USE_SECOND_CANDLES:
+                            sec_candles = self.api.get_candles_seconds(market, SECOND_MOMENTUM_WINDOW * 2)
+                            self.analyzers[market].update_second_candles(sec_candles)
+                            
+                        self.last_price_updates[market] = None
+                        
+                    except Exception as e:
+                        logger.error(f"[{market}] 초기 데이터 로딩 실패: {e}")
+
+                self.markets = new_markets
+                
+        except Exception as e:
+            logger.error(f"마켓 리스트 갱신 실패: {e}")
+
+    async def _market_update_loop(self):
+        """주기적으로 마켓 리스트 갱신"""
+        while self.running:
+            try:
+                await self._update_top_markets()
+            except Exception as e:
+                logger.error(f"마켓 업데이트 루프 오류: {e}")
+            
+            await asyncio.sleep(MARKET_UPDATE_INTERVAL)
+
     async def start(self):
         """트레이딩 봇 시작"""
         logger.info("=" * 60)
         logger.info("🚀 모멘텀 트레이딩 봇 시작")
-        logger.info(f"   타겟 마켓: {self.markets}")
+        
+        # 1. 마켓 리스트 구성 (가장 먼저 실행)
+        await self._update_top_markets()
+        
+        if not self.markets:
+             logger.error("거래 가능한 마켓이 없습니다. 종료합니다.")
+             return
+
+        logger.info(f"   타겟 마켓: {len(self.markets)}개 종목 (Top {TOP_MARKET_COUNT} + 보유)")
         logger.info(f"   최대 투자금: {MAX_INVESTMENT:,}원")
         logger.info(f"   테스트 모드: {'ON' if DRY_RUN else 'OFF'}")
         logger.info("=" * 60)
         
-        # 초기 잔고 확인
+        # 2. 초기 잔고 확인
         self._check_balance()
         
-        # 초기 거시 분석 (모든 마켓)
-        # 초기화 시 Rate Limit 방지를 위해 순차적으로 호출
-        for market in self.markets:
-            logger.info(f"[{market}] 초기 거시 데이터 로딩...")
-            self.analyzers[market].analyze_macro()
-            time.sleep(1.0)  # 마켓 간 딜레이
-            
-            # 초기 분봉 데이터 로딩 (캐시 채우기)
-            try:
-                candles = self.api.get_candles_minutes(market, CANDLE_UNIT, MOMENTUM_WINDOW * 2)
-                self.analyzers[market].update_candles(candles)
-                time.sleep(0.5)
-                
-                if USE_SECOND_CANDLES:
-                    second_candles = self.api.get_candles_seconds(market, SECOND_MOMENTUM_WINDOW * 2)
-                    self.analyzers[market].update_second_candles(second_candles)
-                    time.sleep(0.5)
-            except Exception as e:
-                logger.error(f"[{market}] 초기 캔들 로딩 실패: {e}")
+        # 3. 기 보유 종목에 대한 상태 동기화
+        self._sync_state_with_balance()
         
         self.running = True
         
@@ -734,7 +892,9 @@ class MomentumTrader:
                 self._public_ws_monitor(),
                 self._private_ws_monitor(),
                 self._trading_loop(),
-                self._macro_update_loop()
+                self._macro_update_loop(),
+                self._balance_report_loop(),
+                self._market_update_loop()
             )
         except KeyboardInterrupt:
             logger.info("사용자에 의해 중단됨")
@@ -743,22 +903,78 @@ class MomentumTrader:
         finally:
             self.running = False
             self._print_summary()
+
+    async def _balance_report_loop(self):
+        """주기적인 잔고 및 보유 종목 리포트"""
+        while self.running:
+            await asyncio.sleep(BALANCE_REPORT_INTERVAL)
+            try:
+                # 잔고 확인은 API 호출이 포함되므로 별도로 로그 처리
+                logger.info("=" * 40)
+                logger.info("📋 정기 보유 종목 및 잔고 리포트")
+                # Blocking IO를 Executor에서 실행
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._check_balance)
+                logger.info("=" * 40)
+            except Exception as e:
+                logger.error(f"리포트 루프 오류: {e}")
     
     def _check_balance(self):
-        """잔고 확인"""
+        """잔고 확인 (WebSocket 데이터 기반)"""
         try:
-            accounts = self.api.get_accounts()
-            for acc in accounts:
-                if acc['currency'] == 'KRW':
-                    balance = float(acc['balance'])
-                    logger.info(f"💰 KRW 잔고: {balance:,.0f}원")
-                else:
-                     # 보유 코인 정보 출력
-                    balance = float(acc['balance'])
-                    locked = float(acc['locked'])
-                    avg_buy_price = float(acc['avg_buy_price'])
-                    if balance > 0:
-                         logger.info(f"🪙 {acc['currency']} 잔고: {balance:.8f} (잠김: {locked:.8f}) 평단: {avg_buy_price:,.0f}")
+            # KRW 잔고 표시
+            if 'KRW' in self.assets:
+                krw = self.assets['KRW']
+                balance = krw['balance']
+                locked = krw['locked']
+                krw = self.assets['KRW']
+                balance = krw['balance']
+                locked = krw['locked']
+                logger.info(f"💰 KRW 잔고: {Color.YELLOW}{balance:,.0f}원{Color.RESET} (주문가능: {Color.YELLOW}{balance-locked:,.0f}원{Color.RESET})")
+            
+            # 보유 자산별 평가금액 계산
+            total_valuation = 0.0
+            
+            for currency, asset in self.assets.items():
+                if currency == 'KRW':
+                    continue
+                    
+                balance = asset['balance']
+                locked = asset['locked']
+                total_balance = balance + locked
+                
+                if total_balance <= 0:
+                    continue
+                    
+                avg_buy_price = asset.get('avg_buy_price', 0.0)
+                
+                # 현재가 조회 (KRW 마켓 가정)
+                market_code = f"KRW-{currency}"
+                current_price = self.current_prices.get(market_code, 0.0)
+                
+                # 현재가가 없으면 평단가로 대쳐 (보수적 평가)
+                if current_price == 0:
+                    current_price = avg_buy_price
+                
+                valuation = total_balance * current_price
+                total_valuation += valuation
+                
+                # 수익률 계산
+                profit_rate = 0.0
+                if avg_buy_price > 0:
+                     profit_rate = (current_price - avg_buy_price) / avg_buy_price * 100
+                
+                # 수익률 색상
+                pnl_color = Color.GREEN if profit_rate >= 0 else Color.RED
+                
+                logger.info(f"🪙 {Color.BOLD}{currency}{Color.RESET} | "
+                          f"보유: {Color.YELLOW}{total_balance:,.8f}{Color.RESET} | "
+                          f"평단: {Color.YELLOW}{avg_buy_price:,.0f}원{Color.RESET} | "
+                          f"현재: {Color.YELLOW}{current_price:,.0f}원{Color.RESET} | "
+                          f"평가: {Color.YELLOW}{valuation:,.0f}원{Color.RESET} ({pnl_color}{profit_rate:+.2f}%{Color.RESET})")
+                          
+            logger.info(f"💵 총 자산 추정: {Color.YELLOW}{self.assets.get('KRW', {}).get('balance', 0) + total_valuation:,.0f}원{Color.RESET}")
+            
         except Exception as e:
             logger.error(f"잔고 확인 실패: {e}")
     
@@ -880,7 +1096,8 @@ class MomentumTrader:
                                     cur = asset.get('currency') or asset.get('cu')
                                     self.assets[cur] = {
                                         'balance': float(asset.get('balance') or asset.get('b')),
-                                        'locked': float(asset.get('locked') or asset.get('l'))
+                                        'locked': float(asset.get('locked') or asset.get('l')),
+                                        'avg_buy_price': float(asset.get('avg_buy_price') or asset.get('abp'))
                                     }
                                     
                             elif type_val == 'myOrder':
@@ -1000,8 +1217,8 @@ class MomentumTrader:
             
             if momentum['signal']:
                 rapid_indicator = "🚀" if momentum.get('rapid_rise') else "🎯"
-                logger.info(f"[{market}] {rapid_indicator} 진입 신호 감지! | {momentum['reason']} | "
-                          f"강도: {momentum['strength']:.1f}")
+                logger.info(f"[{Color.BOLD}{market}{Color.RESET}] {rapid_indicator} 진입 신호 감지! | {momentum['reason']} | "
+                          f"강도: {Color.MAGENTA}{momentum['strength']:.1f}{Color.RESET}")
                 await self._execute_buy(market)
                 
         except Exception as e:
@@ -1019,14 +1236,14 @@ class MomentumTrader:
             invest_amount = min(MAX_INVESTMENT, krw_balance * 0.99)  # 99%만 사용 (수수료 대비)
             
             if invest_amount < MIN_ORDER_AMOUNT:
-                logger.warning(f"잔고 부족: {krw_balance:,.0f}원")
+                logger.warning(f"잔고 부족: {Color.YELLOW}{krw_balance:,.0f}원{Color.RESET}")
                 return
             
             current_price = self.current_prices[market]
             
             if DRY_RUN:
-                logger.info(f"[{market}] 🛒 [테스트] 시장가 매수 | 금액: {invest_amount:,.0f}원 | "
-                          f"현재가: {current_price:,.0f}원")
+                logger.info(f"[{Color.BOLD}{market}{Color.RESET}] 🛒 [테스트] 시장가 매수 | 금액: {Color.YELLOW}{invest_amount:,.0f}원{Color.RESET} | "
+                          f"현재가: {Color.YELLOW}{current_price:,.0f}원{Color.RESET}")
                 # 테스트 모드에서는 가상 포지션 생성
                 state = self.states[market]
                 state.position = {
@@ -1043,8 +1260,8 @@ class MomentumTrader:
                     ord_type='price',  # 시장가 매수
                     price=str(int(invest_amount))
                 )
-                logger.info(f"[{market}] 🛒 시장가 매수 주문 요청 | UUID: {result['uuid']} | "
-                          f"금액: {invest_amount:,.0f}원")
+                logger.info(f"[{Color.BOLD}{market}{Color.RESET}] 🛒 시장가 매수 주문 요청 | UUID: {result['uuid']} | "
+                          f"금액: {Color.YELLOW}{invest_amount:,.0f}원{Color.RESET}")
                 
                 # 체결 대기 (Polling 제거 -> WebSocket myOrder로 확인해야 정확하지만)
                 # 시장가 주문은 거의 즉시 체결되므로, 여기서는 잠시 대기 후 state 업데이트를 기다림
@@ -1078,9 +1295,9 @@ class MomentumTrader:
                 
                 state.record_trade('buy', invest_amount, state.entry_price)
                 
-                logger.info(f"[{market}] ✅ 매수 체결 | 가격: {state.entry_price:,.0f}원 | "
-                          f"손절가: {state.stop_loss_price:,.0f}원 | "
-                          f"익절가: {state.take_profit_price:,.0f}원")
+                logger.info(f"[{Color.BOLD}{market}{Color.RESET}] ✅ 매수 체결 | 가격: {Color.YELLOW}{state.entry_price:,.0f}원{Color.RESET} | "
+                          f"손절가: {Color.RED}{state.stop_loss_price:,.0f}원{Color.RESET} | "
+                          f"익절가: {Color.GREEN}{state.take_profit_price:,.0f}원{Color.RESET}")
                 
         except Exception as e:
             logger.error(f"[{market}] 매수 실행 오류: {e}")
@@ -1102,7 +1319,7 @@ class MomentumTrader:
             # 트레일링 스탑 활성화 확인
             if profit_rate >= TRAILING_STOP_ACTIVATION and not state.trailing_active:
                 state.trailing_active = True
-                logger.info(f"[{market}] 📊 트레일링 스탑 활성화 | 수익률: {profit_rate*100:.2f}%")
+                logger.info(f"[{Color.BOLD}{market}{Color.RESET}] 📊 트레일링 스탑 활성화 | 수익률: {Color.GREEN}{profit_rate*100:.2f}%{Color.RESET}")
             
             # 트레일링 스탑 가격 업데이트
             if state.trailing_active:
@@ -1110,7 +1327,7 @@ class MomentumTrader:
                 if new_stop > state.stop_loss_price:
                     old_stop = state.stop_loss_price
                     state.stop_loss_price = new_stop
-                    logger.debug(f"[{market}] 🔄 트레일링 스탑 갱신: {old_stop:,.0f} → {new_stop:,.0f}원")
+                    logger.debug(f"[{Color.BOLD}{market}{Color.RESET}] 🔄 트레일링 스탑 갱신: {old_stop:,.0f} → {Color.RED}{new_stop:,.0f}원{Color.RESET}")
         
         # 매도 조건 체크
         sell_reason = None
@@ -1145,10 +1362,119 @@ class MomentumTrader:
             # 상태 로깅 (10초마다)
             if int(time.time()) % 10 == 0:
                 pnl = profit_rate * 100
-                logger.info(f"[{market}] 📈 보유 중 | 현재가: {current:,.0f}원 | "
-                          f"수익률: {pnl:+.2f}% | "
-                          f"손절가: {state.stop_loss_price:,.0f}원")
+                pnl_color = Color.GREEN if pnl >= 0 else Color.RED
+                logger.info(f"[{Color.BOLD}{market}{Color.RESET}] 📈 보유 중 | 현재가: {Color.YELLOW}{current:,.0f}원{Color.RESET} | "
+                          f"수익률: {pnl_color}{pnl:+.2f}%{Color.RESET} | "
+                          f"손절가: {Color.RED}{state.stop_loss_price:,.0f}원{Color.RESET}")
     
+    
+    def _sync_state_with_balance(self):
+        """보유 종목에 대한 상태 동기화 (재시작 시)"""
+        logger.info("♻️ 기존 보유 종목 상태 동기화 중...")
+        
+        for market in self.markets:
+            currency = market.split('-')[1]
+            asset = self.assets.get(currency)
+            
+            if not asset:
+                continue
+                
+            balance = asset['balance'] + asset['locked']
+            # 최소 거래 금액(5000원) 이상 가치가 있는지 대략 확인 (평단가 기준)
+            avg_price = asset.get('avg_buy_price', 0)
+            if balance * avg_price < 5000:
+                continue
+
+            # 이미 상태가 있으면 스킵
+            if self.states[market].has_position():
+                continue
+                
+            logger.info(f"[{market}] 보유 물량 감지 (수량: {balance}, 평단: {avg_price}) - 상태 복구 시도")
+            
+            try:
+                # 최근 주문 조회 (최대 1달간, 7일씩 끊어서 조회)
+                last_buy = None
+                
+                # 현재 시간부터 12주(3개월) 전까지 1주 단위로 조회
+                current_cursor = datetime.now()
+                
+                for i in range(12):
+                    # 조회 기간 설정 (끝: current_cursor, 시작: -7일)
+                    end_str = current_cursor.isoformat(timespec='seconds') + "+09:00"
+                    start_dt = current_cursor - timedelta(days=7)
+                    start_str = start_dt.isoformat(timespec='seconds') + "+09:00"
+                    
+                    orders = self.api.get_closed_orders(market, limit=1000, start_time=start_str, end_time=end_str)
+                    logger.info(f"[{market}] 주문 조회 ({i+1}/4주전): {len(orders)}개 ({start_str} ~ {end_str})")
+                    
+                    for order in orders:
+                        # 체결 가격 계산 (시장가 주문은 price 필드가 없을 수 있음)
+                        exec_price = order.get('price')
+                        if not exec_price:
+                            if float(order.get('executed_volume', 0)) > 0:
+                                exec_price = float(order.get('executed_funds', 0)) / float(order.get('executed_volume'))
+                            else:
+                                exec_price = 0
+                                
+                        logger.info(f"  📜 주문내역: {order['created_at']} | {order['side']} | {exec_price} | {order.get('uuid')} | {order['state']}")
+                        
+                        # 매수(bid)이고 체결량이 있는 주문 (done 또는 cancel)
+                        # 시장가 매수는 잔량이 남으면 cancel 상태가 될 수 있음
+                        if order['side'] == 'bid' and float(order.get('executed_volume', 0)) > 0:
+                            last_buy = order
+                            if not last_buy.get('price'):
+                                last_buy['price'] = exec_price # 값을 채워넣음
+                            break
+                    
+                    if last_buy:
+                        break
+                        
+                    # 못 찾았으면 다음 루프를 위해 커서를 7일 전으로 이동
+                    current_cursor = start_dt
+                    # API 호출 제한 고려 잠시 대기
+                    time.sleep(0.1)
+                
+                state = self.states[market]
+                
+                if last_buy:
+                    # 최근 매수 내역이 있으면 그것을 기준으로 설정
+                    # 주의: 평단가는 이동평균이므로 실제 마지막 매수가와 다를 수 있음. 
+                    # 로직상 평단가를 기준으로 수익률 계산하는 것이 맞음.
+                    entry_price = float(asset['avg_buy_price']) 
+                    # API 시간(Aware)을 로컬 시간(Naive)으로 변환하여 통일
+                    entry_dt_aware = datetime.fromisoformat(last_buy['created_at'].replace('Z', '+00:00'))
+                    entry_time = entry_dt_aware.astimezone().replace(tzinfo=None)
+                    
+                    logger.info(f"[{market}] 최근 매수 내역 발견: {last_buy['created_at']} (매수가: {last_buy.get('price', 0)})")
+                else:
+                    # 매수 내역을 못 찾으면 (너무 오래됨) 현재 시간과 평단가로 설정
+                    entry_price = float(asset['avg_buy_price'])
+                    entry_time = datetime.now()
+                    logger.warning(f"[{market}] 매수 내역을 찾을 수 없어 평단가 기준으로 초기화합니다.")
+
+                # 포지션 상태 복구
+                state.position = {
+                    'side': 'bid',
+                    'price': entry_price,
+                    'amount': balance * entry_price,
+                    'volume': balance
+                }
+                state.entry_price = entry_price
+                state.entry_time = entry_time
+                state.highest_price = entry_price # 일단 평단가로 초기화 (이후 시세 업데이트 시 변경됨)
+                
+                # 손절/익절가 재설정 (현재 평단가 기준)
+                state.stop_loss_price = entry_price * (1 - INITIAL_STOP_LOSS)
+                state.take_profit_price = entry_price * (1 + TAKE_PROFIT_TARGET)
+                state.trailing_active = False
+                
+                logger.info(f"[{Color.BOLD}{market}{Color.RESET}] ✅ 상태 복구 완료 | 진입가: {Color.YELLOW}{entry_price:,.0f}원{Color.RESET} | "
+                          f"수량: {Color.YELLOW}{balance:,.8f}{Color.RESET} | "
+                          f"손절가: {Color.RED}{state.stop_loss_price:,.0f}원{Color.RESET}")
+                
+            except Exception as e:
+                logger.error(f"[{market}] 상태 동기화 실패: {e}")
+
     async def _execute_sell(self, market: str, reason: str):
         """매도 실행"""
         state = self.states[market]
@@ -1194,8 +1520,10 @@ class MomentumTrader:
             state.trailing_active = False
             
             emoji = "🎉" if profit >= 0 else "📉"
-            logger.info(f"[{market}] {emoji} 매도 완료 | 사유: {reason} | "
-                       f"수익: {profit:+,.0f}원 ({profit_rate:+.2f}%)")
+            pnl_color = Color.GREEN if profit >= 0 else Color.RED
+            logger.info(f"[{Color.BOLD}{market}{Color.RESET}] {emoji} 매도 완료 | 사유: {reason} | "
+                       f"수익: {pnl_color}{profit:+,.0f}원 ({profit_rate:+.2f}%){Color.RESET} | "
+                       f"매도가: {Color.YELLOW}{executed_price:,.0f}원{Color.RESET}")
             
         except Exception as e:
             logger.error(f"[{market}] 매도 실행 오류: {e}")
