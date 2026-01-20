@@ -538,10 +538,20 @@ class MarketAnalyzer:
             return {'trend': 'neutral', 'score': 0, 'can_trade': True}
     
     def update_candles(self, candles: List[Dict]):
-        """분봉 데이터 업데이트"""
+        """1분봉 데이터 업데이트"""
         for candle in reversed(candles):  # 시간순 정렬
             self.minute_candles.append(candle)
             self.volume_history.append(candle['candle_acc_trade_volume'])
+    
+    def update_candles_5m(self, candles: List[Dict]):
+        """5분봉 데이터 업데이트"""
+        for candle in reversed(candles):  # 시간순 정렬
+            self.minute5_candles.append(candle)
+    
+    def update_candles_15m(self, candles: List[Dict]):
+        """15분봉 데이터 업데이트"""
+        for candle in reversed(candles):  # 시간순 정렬
+            self.minute15_candles.append(candle)
             
     def update_second_candles(self, candles: List[Dict]):
         """초봉 데이터 업데이트"""
@@ -562,8 +572,8 @@ class MarketAnalyzer:
             'candle_acc_trade_volume': data.get('candle_acc_trade_volume') or data.get('catv'),
         }
         
-        # 1분봉 (candle.minute.1 또는 candle.1m)
-        if type_key in ['candle.minute.1', 'candle.1m']:
+        # 1분봉 (candle.1m)
+        if type_key == 'candle.1m':
             if self.minute_candles and self.minute_candles[-1]['candle_date_time_kst'] == candle['candle_date_time_kst']:
                 self.minute_candles[-1] = candle
                 if self.volume_history:
@@ -572,28 +582,29 @@ class MarketAnalyzer:
                 self.minute_candles.append(candle)
                 self.volume_history.append(candle['candle_acc_trade_volume'])
         
-        # 5분봉
-        elif type_key == 'candle.minute.5':
+        # 5분봉 (candle.5m)
+        elif type_key == 'candle.5m':
             if self.minute5_candles and self.minute5_candles[-1]['candle_date_time_kst'] == candle['candle_date_time_kst']:
                 self.minute5_candles[-1] = candle
             else:
                 self.minute5_candles.append(candle)
         
-        # 15분봉
-        elif type_key == 'candle.minute.15':
+        # 15분봉 (candle.15m)
+        elif type_key == 'candle.15m':
             if self.minute15_candles and self.minute15_candles[-1]['candle_date_time_kst'] == candle['candle_date_time_kst']:
                 self.minute15_candles[-1] = candle
             else:
                 self.minute15_candles.append(candle)
                 
-        # 초봉 (candle.second.1 또는 candle.1s)
-        elif type_key in ['candle.second.1', 'candle.1s']:
+        # 초봉 (candle.1s)
+        elif type_key == 'candle.1s':
             if self.second_candles and self.second_candles[-1]['candle_date_time_kst'] == candle['candle_date_time_kst']:
                 self.second_candles[-1] = candle
                 if self.second_volume_history:
                     self.second_volume_history[-1] = candle['candle_acc_trade_volume']
             else:
                 self.second_candles.append(candle)
+                self.second_volume_history.append(candle['candle_acc_trade_volume'])
     
     
     def update_orderbook_from_ws(self, data: Dict):
@@ -1148,14 +1159,26 @@ class MomentumTrader:
                             
                         try:
                             self.analyzers[market].analyze_macro()
+                            
+                            # 1분봉 로드
                             candles = self.api.get_candles_minutes(market, CANDLE_UNIT, 200)
                             self.analyzers[market].update_candles(candles)
                             
-                            if USE_SECOND_CANDLES:
-                                sec_candles = self.api.get_candles_seconds(market, SECOND_MOMENTUM_WINDOW * 2)
-                                self.analyzers[market].update_second_candles(sec_candles)
-                                
+                            # 5분봉 로드
+                            candles_5m = self.api.get_candles_minutes(market, 5, 100)
+                            self.analyzers[market].update_candles_5m(candles_5m)
+                            
+                            # 15분봉 로드
+                            candles_15m = self.api.get_candles_minutes(market, 15, 50)
+                            self.analyzers[market].update_candles_15m(candles_15m)
+                            
+                            # 초봉 로드
+                            sec_candles = self.api.get_candles_seconds(market, 120)
+                            self.analyzers[market].update_second_candles(sec_candles)
+                            
                             self.last_price_updates[market] = None
+                            logger.info(f"[{market}] 초기 데이터 로드 완료 (1분:{len(candles)} 5분:{len(candles_5m)} 15분:{len(candles_15m)} 초:{len(sec_candles)})")
+                            
                         except Exception as e:
                             logger.error(f"[{market}] 초기 데이터 로딩 실패: {e}")
                     
@@ -1210,14 +1233,25 @@ class MomentumTrader:
                     # 초기 데이터 로딩 (캔들, 거시분석)
                     try:
                         self.analyzers[market].analyze_macro()
+                        
+                        # 1분봉 로드
                         candles = self.api.get_candles_minutes(market, CANDLE_UNIT, 200)
                         self.analyzers[market].update_candles(candles)
                         
-                        if USE_SECOND_CANDLES:
-                            sec_candles = self.api.get_candles_seconds(market, SECOND_MOMENTUM_WINDOW * 2)
-                            self.analyzers[market].update_second_candles(sec_candles)
-                            
+                        # 5분봉 로드
+                        candles_5m = self.api.get_candles_minutes(market, 5, 100)
+                        self.analyzers[market].update_candles_5m(candles_5m)
+                        
+                        # 15분봉 로드
+                        candles_15m = self.api.get_candles_minutes(market, 15, 50)
+                        self.analyzers[market].update_candles_15m(candles_15m)
+                        
+                        # 초봉 로드
+                        sec_candles = self.api.get_candles_seconds(market, 120)
+                        self.analyzers[market].update_second_candles(sec_candles)
+                        
                         self.last_price_updates[market] = None
+                        logger.info(f"[{market}] 초기 데이터 로드 완료")
                         
                     except Exception as e:
                         logger.error(f"[{market}] 초기 데이터 로딩 실패: {e}")
@@ -1407,25 +1441,24 @@ class MomentumTrader:
         """WebSocket (Public) - 실시간 시세, 호가, 체결, 캔들"""
         while self.running:
             try:
-                async with websockets.connect(WS_PUBLIC_URL) as ws:
-                    # 구독 요청 - 다양한 시간대의 캔들 및 체결 데이터
+                async with websockets.connect(WS_PUBLIC_URL, ping_interval=60, ping_timeout=30) as ws:
                     codes = self.markets
+                    
+                    # 구독: ticker, trade, orderbook, candle (1s, 1m, 5m, 15m)
                     subscribe = [
                         {"ticket": f"momentum-pub-{uuid.uuid4()}"},
-                        {"type": "ticker", "codes": codes},
-                        {"type": "trade", "codes": codes},           # 체결 데이터 (매수/매도 구분)
-                        {"type": "orderbook", "codes": codes},       # 호가 데이터
-                        {"type": "candle.minute.1", "codes": codes}, # 1분봉
-                        {"type": "candle.minute.5", "codes": codes}, # 5분봉 추가
-                        {"type": "candle.minute.15", "codes": codes},# 15분봉 추가
+                        {"type": "ticker", "codes": codes, "isOnlyRealtime": True},
+                        {"type": "trade", "codes": codes, "isOnlyRealtime": True},
+                        {"type": "orderbook", "codes": codes, "isOnlyRealtime": True},
+                        {"type": "candle.1s", "codes": codes},    # 초봉
+                        {"type": "candle.1m", "codes": codes},    # 1분봉
+                        {"type": "candle.5m", "codes": codes},    # 5분봉
+                        {"type": "candle.15m", "codes": codes},   # 15분봉
                         {"format": "DEFAULT"}
                     ]
                     
-                    if USE_SECOND_CANDLES:
-                         subscribe.insert(4, {"type": "candle.second.1", "codes": codes}) 
-                    
                     await ws.send(json.dumps(subscribe))
-                    logger.info(f"📡 Public WebSocket 연결됨 ({len(codes)}개 마켓) - 1분/5분/15분봉 + 체결 + 호가")
+                    logger.info(f"📡 Public WebSocket 연결됨 ({len(codes)}개 마켓) - ticker + trade + orderbook + 초/1분/5분/15분봉")
                     
                     # PING 타이머
                     last_ping = time.time()
@@ -1442,18 +1475,23 @@ class MomentumTrader:
                             
                             if msg == "PONG":
                                 continue
-                                
+                            
                             data = json.loads(msg)
                             
+                            # 에러 응답 처리
+                            if 'error' in data:
+                                err_name = data['error'].get('name', 'UNKNOWN')
+                                err_msg = data['error'].get('message', '')
+                                logger.error(f"WebSocket 에러: {err_name} - {err_msg}")
+                                continue
+                            
                             type_val = data.get('type') or data.get('ty')
-                            if not type_val: # type 없는 경우
-                                 continue
+                            if not type_val:  # type 없는 경우
+                                continue
                             
-                            code = data.get('cd') # 마켓 코드 (KRW-BTC 등)
-                            if not code:
-                                code = data.get('code')
+                            code = data.get('cd') or data.get('code')  # 마켓 코드 (KRW-BTC 등)
                             
-                            if code in self.markets:
+                            if code and code in self.markets:
                                 if type_val == 'ticker':
                                     self.current_prices[code] = data.get('trade_price') or data.get('tp')
                                     self.last_price_updates[code] = datetime.now()
@@ -1464,20 +1502,21 @@ class MomentumTrader:
                                     self.last_price_updates[code] = datetime.now()
                                     # 체결 데이터를 Analyzer에 전달 (매수/매도 분석용)
                                     self.analyzers[code].update_trade_from_ws(data)
-                                
-                                elif type_val.startswith('candle.'):
-                                    # 캔들 데이터 (1분/5분/15분/초봉)
-                                    self.analyzers[code].update_candle_from_ws(data, type_val)
                                     
                                 elif type_val == 'orderbook':
+                                    # 호가 데이터 - 매수벽/매도벽 분석
                                     self.analyzers[code].update_orderbook_from_ws(data)
+                                
+                                elif type_val.startswith('candle.'):
+                                    # 캔들 데이터 (1s, 1m, 5m, 15m 등)
+                                    self.analyzers[code].update_candle_from_ws(data, type_val)
                                 
                         except asyncio.TimeoutError:
                             await ws.send("PING")
                             last_ping = time.time()
                             
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("Public WebSocket 연결 끊김, 재연결 시도...")
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"Public WebSocket 연결 끊김 (code:{e.code}), 재연결 시도...")
                 await asyncio.sleep(3)
             except Exception as e:
                 logger.error(f"Public WebSocket 오류: {e}")

@@ -108,18 +108,18 @@ jwt_token = jwt.encode(payload, secret_key)
 
 ### 3.1 REST API 제한
 
-| API 그룹 | 제한 | 비고 |
-|---------|------|------|
-| Quotation (시세 조회) | 초당 10회 | 그룹별 제한 |
-| Exchange (주문 생성/취소) | 초당 8회 | 계정 단위 |
-| 주문 일괄 취소 | 2초당 1회 | DELETE /v1/orders/open |
-| 기타 Exchange API | 초당 30회 | - |
+| API 그룹                  | 제한      | 비고                   |
+| ------------------------- | --------- | ---------------------- |
+| Quotation (시세 조회)     | 초당 10회 | 그룹별 제한            |
+| Exchange (주문 생성/취소) | 초당 8회  | 계정 단위              |
+| 주문 일괄 취소            | 2초당 1회 | DELETE /v1/orders/open |
+| 기타 Exchange API         | 초당 30회 | -                      |
 
 ### 3.2 WebSocket 제한
 
-| 항목 | 제한 |
-|------|------|
-| 연결 요청 | 초당 5회 |
+| 항목               | 제한                 |
+| ------------------ | -------------------- |
+| 연결 요청          | 초당 5회             |
 | 메시지 요청 (구독) | 초당 5회, 분당 100회 |
 
 ### 3.3 Origin 헤더 제한
@@ -163,16 +163,16 @@ query_string = urllib.parse.urlencode(params)
 
 ### 4.3 HTTP 상태 코드 및 에러
 
-| 상태 코드 | 에러 코드 예시 | 원인 | 해결 방법 |
-|-----------|----------------|------|-----------|
-| 200 OK | - | 정상 처리 | - |
-| 201 Created | - | 생성 완료 (주문 등) | - |
-| 400 Bad Request | `create_ask_error`<br>`create_bid_error`<br>`insufficient_funds_ask`<br>`insufficient_funds_bid`<br>`under_min_total_ask`<br>`under_min_total_bid`<br>`validation_error` | 파라미터 오류<br>잔고 부족<br>최소 주문 금액 미달 | 파라미터 확인<br>잔고 확인<br>주문 정책 준수 |
-| 401 Unauthorized | `invalid_query_payload`<br>`jwt_verification`<br>`expired_access_key`<br>`nonce_used`<br>`no_authorization_ip`<br>`no_authorization_token`<br>`out_of_scope` | JWT 인증 실패<br>API Key 만료<br>IP 허용 목록 미등록<br>권한 없는 기능 요청 | JWT 재생성<br>API Key 확인<br>IP 등록 확인<br>권한 설정 확인 |
-| 404 Not Found | - | 존재하지 않는 리소스 | 경로/UUID 확인 |
-| 429 Too Many Requests | - | Rate Limit 초과 | 요청 빈도 감소 |
-| 418 I'm a teapot | - | 반복적인 제한 위반 | 차단 기간 대기 |
-| 500 Internal Server Error | - | 서버 내부 오류 | 재시도 또는 공지 확인 |
+| 상태 코드                 | 에러 코드 예시                                                                                                                                                           | 원인                                                                        | 해결 방법                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| 200 OK                    | -                                                                                                                                                                        | 정상 처리                                                                   | -                                                            |
+| 201 Created               | -                                                                                                                                                                        | 생성 완료 (주문 등)                                                         | -                                                            |
+| 400 Bad Request           | `create_ask_error`<br>`create_bid_error`<br>`insufficient_funds_ask`<br>`insufficient_funds_bid`<br>`under_min_total_ask`<br>`under_min_total_bid`<br>`validation_error` | 파라미터 오류<br>잔고 부족<br>최소 주문 금액 미달                           | 파라미터 확인<br>잔고 확인<br>주문 정책 준수                 |
+| 401 Unauthorized          | `invalid_query_payload`<br>`jwt_verification`<br>`expired_access_key`<br>`nonce_used`<br>`no_authorization_ip`<br>`no_authorization_token`<br>`out_of_scope`             | JWT 인증 실패<br>API Key 만료<br>IP 허용 목록 미등록<br>권한 없는 기능 요청 | JWT 재생성<br>API Key 확인<br>IP 등록 확인<br>권한 설정 확인 |
+| 404 Not Found             | -                                                                                                                                                                        | 존재하지 않는 리소스                                                        | 경로/UUID 확인                                               |
+| 429 Too Many Requests     | -                                                                                                                                                                        | Rate Limit 초과                                                             | 요청 빈도 감소                                               |
+| 418 I'm a teapot          | -                                                                                                                                                                        | 반복적인 제한 위반                                                          | 차단 기간 대기                                               |
+| 500 Internal Server Error | -                                                                                                                                                                        | 서버 내부 오류                                                              | 재시도 또는 공지 확인                                        |
 
 ### 4.4 에러 응답 형식
 
@@ -243,11 +243,11 @@ WebSocket 메시지는 JSON Array 형식:
 
 ### 5.3 Format 옵션
 
-| Format | 설명 |
-|--------|------|
-| `DEFAULT` | 전체 필드명 사용 |
-| `SIMPLE` | 축약된 필드명 사용 |
-| `JSON_LIST` | 리스트 형태 (전체 필드명) |
+| Format        | 설명                      |
+| ------------- | ------------------------- |
+| `DEFAULT`     | 전체 필드명 사용          |
+| `SIMPLE`      | 축약된 필드명 사용        |
+| `JSON_LIST`   | 리스트 형태 (전체 필드명) |
 | `SIMPLE_LIST` | 리스트 형태 (축약 필드명) |
 
 ### 5.4 연결 유지
@@ -263,14 +263,14 @@ setInterval(() => {
 
 ### 5.5 WebSocket 에러 코드
 
-| 에러 코드 | 설명 |
-|-----------|------|
-| `INVALID_AUTH` | 인증 정보 오류 |
-| `WRONG_FORMAT` | 메시지 형식 오류 |
-| `NO_TICKET` | Ticket 누락 |
-| `NO_TYPE` | Type 누락 |
-| `NO_CODES` | Codes 누락 (필요한 경우) |
-| `INVALID_PARAM` | 잘못된 파라미터 |
+| 에러 코드       | 설명                     |
+| --------------- | ------------------------ |
+| `INVALID_AUTH`  | 인증 정보 오류           |
+| `WRONG_FORMAT`  | 메시지 형식 오류         |
+| `NO_TICKET`     | Ticket 누락              |
+| `NO_TYPE`       | Type 누락                |
+| `NO_CODES`      | Codes 누락 (필요한 경우) |
+| `INVALID_PARAM` | 잘못된 파라미터          |
 
 ### 5.6 에러 응답 형식
 
@@ -1895,19 +1895,19 @@ GET /v1/api_keys
 ```json
 [
   {"ticket": "test-candle"},
-  {"type": "candle.minute.1", "codes": ["KRW-BTC"]}
+  {"type": "candle.1m", "codes": ["KRW-BTC"]}
 ]
 ```
 
 **지원 단위**:
-- `candle.second.1`, `candle.second.3`, `candle.second.5`, `candle.second.10`, `candle.second.30`, `candle.second.60`
-- `candle.minute.1`, `candle.minute.3`, `candle.minute.5`, `candle.minute.10`, `candle.minute.15`, `candle.minute.30`, `candle.minute.60`, `candle.minute.240`
-- `candle.day`, `candle.week`, `candle.month`
+- 초봉: `candle.1s`, `candle.3s`, `candle.5s`, `candle.10s`, `candle.30s`, `candle.60s`
+- 분봉: `candle.1m`, `candle.3m`, `candle.5m`, `candle.10m`, `candle.15m`, `candle.30m`, `candle.60m`, `candle.240m`
+- 일/주/월봉: `candle.day`, `candle.week`, `candle.month`
 
 **응답 필드**:
 ```json
 {
-  "type": "candle.minute.1",
+  "type": "candle.1m",
   "code": "KRW-BTC",
   "opening_price": 50000000,
   "high_price": 51000000,
@@ -2096,17 +2096,17 @@ response = requests.get('https://api.upbit.com/v1/orderbook/policy?markets=KRW-B
 
 원화 마켓의 호가 단위는 가격 구간에 따라 다릅니다:
 
-| 가격 구간 | 호가 단위 |
-|-----------|----------|
-| 0원 이상 ~ 10원 미만 | 0.01원 |
-| 10원 이상 ~ 100원 미만 | 0.1원 |
-| 100원 이상 ~ 1,000원 미만 | 1원 |
-| 1,000원 이상 ~ 10,000원 미만 | 5원 |
-| 10,000원 이상 ~ 100,000원 미만 | 10원 |
-| 100,000원 이상 ~ 500,000원 미만 | 50원 |
-| 500,000원 이상 ~ 1,000,000원 미만 | 100원 |
-| 1,000,000원 이상 ~ 2,000,000원 미만 | 500원 |
-| 2,000,000원 이상 | 1,000원 |
+| 가격 구간                           | 호가 단위 |
+| ----------------------------------- | --------- |
+| 0원 이상 ~ 10원 미만                | 0.01원    |
+| 10원 이상 ~ 100원 미만              | 0.1원     |
+| 100원 이상 ~ 1,000원 미만           | 1원       |
+| 1,000원 이상 ~ 10,000원 미만        | 5원       |
+| 10,000원 이상 ~ 100,000원 미만      | 10원      |
+| 100,000원 이상 ~ 500,000원 미만     | 50원      |
+| 500,000원 이상 ~ 1,000,000원 미만   | 100원     |
+| 1,000,000원 이상 ~ 2,000,000원 미만 | 500원     |
+| 2,000,000원 이상                    | 1,000원   |
 
 #### 최소 주문 금액
 
@@ -2133,14 +2133,14 @@ invalid_prices = [50000500, 50000100]  # 호가 단위 미준수
 
 USDT 마켓의 호가 단위는 디지털 자산 가격 구간에 따라 다릅니다:
 
-| 가격 구간 | 호가 단위 |
-|-----------|----------|
-| 0 USDT 이상 ~ 0.1 USDT 미만 | 0.00001 USDT |
-| 0.1 USDT 이상 ~ 1 USDT 미만 | 0.0001 USDT |
-| 1 USDT 이상 ~ 10 USDT 미만 | 0.001 USDT |
-| 10 USDT 이상 ~ 100 USDT 미만 | 0.01 USDT |
-| 100 USDT 이상 ~ 1,000 USDT 미만 | 0.1 USDT |
-| 1,000 USDT 이상 | 1 USDT |
+| 가격 구간                       | 호가 단위    |
+| ------------------------------- | ------------ |
+| 0 USDT 이상 ~ 0.1 USDT 미만     | 0.00001 USDT |
+| 0.1 USDT 이상 ~ 1 USDT 미만     | 0.0001 USDT  |
+| 1 USDT 이상 ~ 10 USDT 미만      | 0.001 USDT   |
+| 10 USDT 이상 ~ 100 USDT 미만    | 0.01 USDT    |
+| 100 USDT 이상 ~ 1,000 USDT 미만 | 0.1 USDT     |
+| 1,000 USDT 이상                 | 1 USDT       |
 
 #### 최소 주문 금액
 
@@ -2153,14 +2153,14 @@ USDT 마켓의 호가 단위는 디지털 자산 가격 구간에 따라 다릅�
 
 BTC 마켓의 호가 단위는 디지털 자산 가격 구간에 따라 다릅니다:
 
-| 가격 구간 | 호가 단위 |
-|-----------|----------|
-| 0 BTC 이상 ~ 0.001 BTC 미만 | 0.00000001 BTC |
-| 0.001 BTC 이상 ~ 0.01 BTC 미만 | 0.0000001 BTC |
-| 0.01 BTC 이상 ~ 0.1 BTC 미만 | 0.000001 BTC |
-| 0.1 BTC 이상 ~ 1 BTC 미만 | 0.00001 BTC |
-| 1 BTC 이상 ~ 10 BTC 미만 | 0.0001 BTC |
-| 10 BTC 이상 | 0.001 BTC |
+| 가격 구간                      | 호가 단위      |
+| ------------------------------ | -------------- |
+| 0 BTC 이상 ~ 0.001 BTC 미만    | 0.00000001 BTC |
+| 0.001 BTC 이상 ~ 0.01 BTC 미만 | 0.0000001 BTC  |
+| 0.01 BTC 이상 ~ 0.1 BTC 미만   | 0.000001 BTC   |
+| 0.1 BTC 이상 ~ 1 BTC 미만      | 0.00001 BTC    |
+| 1 BTC 이상 ~ 10 BTC 미만       | 0.0001 BTC     |
+| 10 BTC 이상                    | 0.001 BTC      |
 
 #### 최소 주문 금액
 
