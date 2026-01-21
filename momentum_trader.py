@@ -34,21 +34,6 @@ import jwt
 import requests
 import websockets
 from dotenv import load_dotenv
-import redis
-
-class RedisLogHandler(logging.Handler):
-    def __init__(self, redis_client, channel="[MON]:LOGS"):
-        super().__init__()
-        self.redis_client = redis_client
-        self.channel = channel
-
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            if self.redis_client:
-                self.redis_client.publish(self.channel, msg)
-        except Exception:
-            self.handleError(record)
 
 # =================================================================================
 # 📊 전략 파라미터 (Strategy Parameters) - 여기서 조절 가능
@@ -57,8 +42,6 @@ class RedisLogHandler(logging.Handler):
 # === 투자 설정 ===
 MAX_INVESTMENT = 1000000         # 최대 투자금 (원) - 1천만원으로 상향
 MIN_ORDER_AMOUNT = 5_000            # 최소 주문 금액 (업비트 최소금액 5,000원 + 버퍼)
-TRADING_FEE_RATE = 0.0005           # 거래 수수료 (0.05% = 0.0005)
-REDIS_PASSWORD = "zC0ZQOY0oJPz/NQ/tqTkpG1OEEXHCx5gJrTLFCg1rlw="
 TRADING_FEE_RATE = 0.0005           # 거래 수수료 (0.05% = 0.0005)
 
 # === BTC 중심 시장 분석 (BTC-Centric Market Analysis) ===
@@ -76,7 +59,8 @@ MACRO_UPDATE_INTERVAL = 300         # 거시 분석 갱신 주기 (초)
 
 # === 미시적 분석 (Micro Analysis) - 진입 신호 (대폭 강화) ===
 MOMENTUM_WINDOW = 20                # 모멘텀 계산 윈도우 (캔들 개수) - 20분으로 확대
-MOMENTUM_THRESHOLD = 0.012          # 진입 모멘텀 기준 (1.2% 상승률) - 가짜 신호 필터링 강화
+MOMENTUM_THRESHOLD = 0.015          # 진입 모멘텀 기준 (1.5% 상승률) - 상향 조정
+MIN_SIGNAL_STRENGTH = 75            # 최소 진입 강도 (75점 이상) - 강화
 VOLUME_SPIKE_RATIO = 3.0            # 거래량 급등 배율 (평균 대비 3배) - 수급 확인 강화
 CONSECUTIVE_UP_CANDLES = 6          # 연속 상승 캔들 개수 - 6개로 강화
 
@@ -101,6 +85,17 @@ MTF_15M_TREND_THRESHOLD = 0.001     # 15분봉 상승/횡보 기준 (0.1%, 하�
 MTF_5M_EARLY_STAGE_MAX = 0.025      # 5분봉 상승 초기 단계 최대치 (2.5% 이하여야 초기)
 MTF_VOLUME_CONFIRMATION = 1.5       # 5분봉 거래량 확인 배율 (평균 대비)
 MTF_STRICT_MODE = True              # 엄격 모드 (15분봉 하락 시 무조건 차단)
+
+# === 데이터 영속성 (Data Persistence) ===
+DATA_DIR = "data"
+
+# === 장기 추세 필터 (Long-Term Trend Filter) - v3.2 신규 ===
+LONG_TERM_FILTER_ENABLED = True     # 장기 추세 필터 활성화 (핵심!)
+DAILY_BEARISH_THRESHOLD = -0.02     # 일봉 하락 임계값 (-2% 이하면 하락장)
+H4_BEARISH_THRESHOLD = -0.015       # 4시간봉 하락 임계값 (-1.5% 이하면 하락 추세)
+DAILY_BEARISH_BLOCK = True          # 일봉 하락 시 무조건 진입 차단
+H4_BEARISH_BLOCK = True             # 4시간봉 하락 시 진입 차단
+IGNORE_SHORT_SQUEEZE_IN_DOWNTREND = True  # 하락장에서 Short Squeeze 신호 무시
 
 # === 익절/손절 설정 (핵심 개선) ===
 INITIAL_STOP_LOSS = 0.025           # 초기 손절선 (2.5%) - 빈번한 손절 방지
@@ -157,6 +152,15 @@ logging.basicConfig(
     format='%(asctime)s | %(levelname)-7s | %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+# 로그 파일 핸들러 추가
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+log_file = f"{log_dir}/trading_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-7s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+logging.getLogger().addHandler(file_handler)
+
 logger = logging.getLogger(__name__)
 
 
@@ -380,6 +384,49 @@ class UpbitAPI:
             
         return self._request('GET', '/orders/closed', params=params)
 
+    def get_candles_minutes_extended(self, market: str, unit: int, total_count: int = 600) -> List[Dict]:
+        """다중 페이지 분봉 조회 - to 파라미터를 활용하여 더 많은 히스토리 확보
+        
+        Args:
+            market: 마켓 코드 (예: KRW-BTC)
+            unit: 분봉 단위 (1, 3, 5, 10, 15, 30, 60, 240)
+            total_count: 가져올 총 캔들 개수 (기본 600개)
+        
+        Returns:
+            시간순 정렬된 캔들 리스트 (오래된 것 -> 최신 순)
+        """
+        all_candles = []
+        remaining = total_count
+        to_time = None  # 처음에는 None (현재 시각 기준)
+        
+        while remaining > 0:
+            fetch_count = min(remaining, 200)  # 한 번에 최대 200개
+            
+            try:
+                candles = self.get_candles_minutes(market, unit, fetch_count, to_time)
+                if not candles:
+                    break
+                    
+                all_candles.extend(candles)
+                remaining -= len(candles)
+                
+                # 다음 요청을 위한 to 시간 설정 (가장 오래된 캔들의 시작 시간)
+                if candles:
+                    oldest_candle = candles[-1]
+                    to_time = oldest_candle.get('candle_date_time_utc') or oldest_candle.get('candle_date_time_kst')
+                
+                # Rate Limit 방지
+                time.sleep(0.15)
+                
+            except Exception as e:
+                logger.warning(f"[{market}] 캔들 확장 로드 실패 (unit={unit}, 현재 {len(all_candles)}개): {e}")
+                break
+        
+        # 시간순 정렬 (오래된 것 -> 최신)
+        all_candles.reverse()
+        return all_candles
+
+
 
 class TradingState:
     """거래 상태 관리 (개선된 버전)"""
@@ -394,6 +441,7 @@ class TradingState:
         self.take_profit_price = 0.0      # 익절가
         self.trailing_active = False      # 트레일링 스탑 활성화 여부
         self.dynamic_stop_loss_rate = INITIAL_STOP_LOSS  # 동적 손절율
+        self.processing_order = False     # 주문 처리 중 여부 (중복 주문 방지)
         
         # 거래 기록
         self.trades_today = []            # 오늘 거래 기록
@@ -495,12 +543,12 @@ class MarketAnalyzer:
         self.macro_score = 0.0            # 거시 점수
         self.last_macro_update = None     # 마지막 거시 분석 시간
         
-        # 캔들 데이터 캐시 (다양한 시간대)
-        self.minute_candles = deque(maxlen=200)      # 1분봉
-        self.minute5_candles = deque(maxlen=100)     # 5분봉
-        self.minute15_candles = deque(maxlen=50)     # 15분봉
-        self.second_candles = deque(maxlen=120)      # 초봉 캐시 (최근 2분)
-        self.volume_history = deque(maxlen=100)
+        # 캔들 데이터 캐시 (다양한 시간대 - v3.2 확장)
+        self.minute_candles = deque(maxlen=200)       # 1분봉 (3시간 20분)
+        self.minute5_candles = deque(maxlen=600)      # 5분봉 (50시간 = 약 2일)
+        self.minute15_candles = deque(maxlen=400)     # 15분봉 (100시간 = 약 4일)
+        self.second_candles = deque(maxlen=120)       # 초봉 캐시 (최근 2분)
+        self.volume_history = deque(maxlen=200)
         self.second_volume_history = deque(maxlen=60)
         
         # ==== 체결 데이터 (Trade) - 매수/매도 세력 분석 ====
@@ -534,10 +582,117 @@ class MarketAnalyzer:
         self.market_sentiment = 'neutral'  # bullish/bearish/neutral
         self.sentiment_score = 50.0        # 시장 심리 점수 (0-100)
         
-    def analyze_macro(self) -> Dict:
-        """시장 추세 분석 (초단기/중단기/거시 하이브리드)"""
+    def load_candles_from_disk(self, unit: int) -> List[Dict]:
+        """디스크에서 캔들 데이터 로드 (JSON)"""
         try:
-            # 1. 초단기 분석 (15분봉/30분봉) - 전문가 기법 적용
+            filename = f"{DATA_DIR}/{self.market}_{unit}m.json"
+            if not os.path.exists(filename):
+                return []
+            
+            with open(filename, 'r', encoding='utf-8') as f:
+                candles = json.load(f)
+                # ISO 포맷 시간 문자열 처리 등 필요한 경우 여기서?
+                # 일단 raw dict 리스트 반환
+                return candles
+        except Exception as e:
+            return []
+
+    def save_candles_to_disk(self, unit: int, candles: deque):
+        """디스크에 캔들 데이터 저장 (JSON)"""
+        try:
+            if not os.path.exists(DATA_DIR):
+                os.makedirs(DATA_DIR, exist_ok=True)
+                
+            filename = f"{DATA_DIR}/{self.market}_{unit}m.json"
+            # deque -> list 변환
+            data_to_save = list(candles)
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data_to_save, f)
+        except Exception as e:
+            logger.error(f"[{self.market}] 캔들 저장 실패({unit}m): {e}")
+
+    def initialize_candles_smart(self, unit: int, max_count: int, deque_obj: deque):
+        """로컬 데이터 로드 + API 부족분 요청 (스마트 초기화)"""
+        try:
+            # 1. 로컬 로드
+            local_candles = self.load_candles_from_disk(unit)
+            
+            if not local_candles:
+                candles = self.api.get_candles_minutes_extended(self.market, unit, max_count)
+                deque_obj.extend(candles)
+                self.save_candles_to_disk(unit, deque_obj)
+                # logger.info(f"[{self.market}] {unit}분봉: 전체 API 로드 ({len(candles)}개)")
+                return
+
+            # 2. 갭 계산 (API 최신 캔들 기준)
+            last_local_candle = local_candles[-1]
+            last_local_ts_str = last_local_candle.get('candle_date_time_utc', '')
+            
+            # API로 최신 캔들 1개를 가져와서 현재 시점을 파악 (시스템 시간 의존 제거)
+            latest_api_candles = self.api.get_candles_minutes(self.market, unit, 1)
+            if not latest_api_candles:
+                deque_obj.extend(local_candles)
+                return
+                
+            latest_api_ts_str = latest_api_candles[0].get('candle_date_time_utc', '')
+            
+            gap_count = max_count
+            
+            try:
+                last_local_time = datetime.strptime(last_local_ts_str, "%Y-%m-%dT%H:%M:%S")
+                latest_api_time = datetime.strptime(latest_api_ts_str, "%Y-%m-%dT%H:%M:%S")
+                
+                diff_minutes = (latest_api_time - last_local_time).total_seconds() / 60.0
+                gap_count = int(diff_minutes / unit) + 2 # 여유분
+                if gap_count < 0: gap_count = 0
+            except Exception as e:
+                # logger.warning(f"[{self.market}] 시간 파싱 오류: {e}")
+                gap_count = max_count
+
+            # 3. 갭 메우기
+            if gap_count >= max_count:
+                # 갭이 너무 크면 전체 다시 로드
+                candles = self.api.get_candles_minutes_extended(self.market, unit, max_count)
+                deque_obj.extend(candles)
+                # logger.info(f"[{self.market}] {unit}분봉: 재로드 (갭 큼: {gap_count}개)")
+            elif gap_count > 0:
+                # 갭만큼 요청
+                fetch_count = min(gap_count, 200) 
+                new_candles = self.api.get_candles_minutes(self.market, unit, fetch_count)
+                new_candles.reverse() 
+                
+                last_local_ts = local_candles[-1]['candle_date_time_utc']
+                to_append = [c for c in new_candles if c['candle_date_time_utc'] > last_local_ts]
+                
+                combined = local_candles + to_append
+                if len(combined) > max_count:
+                    combined = combined[-max_count:]
+                
+                deque_obj.extend(combined)
+                # logger.info(f"[{self.market}] {unit}분봉: 스마트 로드 (+{len(to_append)}개)")
+            else:
+                deque_obj.extend(local_candles)
+                # logger.info(f"[{self.market}] {unit}분봉: 최신 상태")
+                
+            # 저장 업데이트
+            self.save_candles_to_disk(unit, deque_obj)
+            
+        except Exception as e:
+            logger.error(f"[{self.market}] 스마트 초기화 실패({unit}m): {e}")
+            candles = self.api.get_candles_minutes_extended(self.market, unit, max_count)
+            deque_obj.extend(candles)
+
+    def analyze_macro(self) -> Dict:
+        """시장 추세 분석 (v3.2 강화 - 장기 하락 추세 필터 추가)
+        
+        핵심 개선:
+        - 일봉/4시간봉 하락 시 Short Squeeze와 관계없이 진입 차단
+        - 장기 추세 가중치 대폭 상향
+        - 하락장 반등 진입 방지
+        """
+        try:
+            # 1. 초단기 분석 (15분봉/30분봉)
             time.sleep(0.1)
             m15 = self.api.get_candles_minutes(self.market, unit=15, count=2)
             m15_change = (m15[0]['trade_price'] - m15[1]['trade_price']) / m15[1]['trade_price'] if len(m15) >= 2 else 0
@@ -555,23 +710,46 @@ class MarketAnalyzer:
             h4 = self.api.get_candles_minutes(self.market, unit=240, count=2)
             h4_change = (h4[0]['trade_price'] - h4[1]['trade_price']) / h4[1]['trade_price'] if len(h4) >= 2 else 0
             
-            # 3. 일봉 (대세 확인)
+            # 3. 일봉 분석 (대세 확인) - 3일치 분석으로 확장
             time.sleep(0.1)
-            daily = self.api.get_candles_days(self.market, count=2)
+            daily = self.api.get_candles_days(self.market, count=4)
             daily_change = (daily[0]['trade_price'] - daily[1]['trade_price']) / daily[1]['trade_price'] if len(daily) >= 2 else 0
+            # 3일간 추세 (더 긴 기간 확인)
+            daily_3d_change = (daily[0]['trade_price'] - daily[3]['trade_price']) / daily[3]['trade_price'] if len(daily) >= 4 else 0
 
-            # 종합 점수 계산 (초단위/분단위 기법 적용 가중치)
-            # 15분(40%) + 30분(25%) + 1시간(15%) + 4시간(15%) + 1일(5%)
-            score = m15_change * 0.4 + m30_change * 0.25 + h1_change * 0.15 + h4_change * 0.15 + daily_change * 0.05
+            # === [v3.2 핵심] 장기 하락 추세 차단 ===
+            long_term_bearish = False
+            block_reason = None
             
-            # [전문가 기법] 단기 수급 급전환 감지 (Aggressive Entry)
-            # 15분간 0.5% 이상 상승하면 거시 추세와 무시하고 단타 기회로 판단
+            if LONG_TERM_FILTER_ENABLED:
+                # 일봉 하락 체크 (3일 기준)
+                if daily_3d_change <= DAILY_BEARISH_THRESHOLD and DAILY_BEARISH_BLOCK:
+                    long_term_bearish = True
+                    block_reason = f"일봉 하락추세 ({daily_3d_change*100:.2f}% / 3일)"
+                
+                # 4시간봉 하락 체크
+                if h4_change <= H4_BEARISH_THRESHOLD and H4_BEARISH_BLOCK:
+                    long_term_bearish = True
+                    block_reason = block_reason or f"4시간봉 하락 ({h4_change*100:.2f}%)"
+            
+            # 종합 점수 계산 (v3.2: 장기 가중치 강화)
+            # 15분(20%) + 30분(15%) + 1시간(20%) + 4시간(25%) + 1일(20%)
+            score = m15_change * 0.20 + m30_change * 0.15 + h1_change * 0.20 + h4_change * 0.25 + daily_change * 0.20
+            
+            # Short Squeeze 감지 (단, 장기 하락장에서는 무시!)
             short_squeeze = m15_change >= SHORT_MOMENTUM_THRESHOLD
             
-            if score < MACRO_MIN_CHANGE_RATE and not short_squeeze:
+            # === 추세 및 거래 가능 판단 ===
+            if long_term_bearish:
+                # [핵심] 장기 하락 시 Short Squeeze 관계없이 차단
                 trend = 'bearish'
                 can_trade = False
-            elif score > MACRO_BULLISH_THRESHOLD or short_squeeze:
+                if short_squeeze and IGNORE_SHORT_SQUEEZE_IN_DOWNTREND:
+                    logger.warning(f"[{self.market}] 🚫 하락장 반등 무시 | {block_reason} | Short Squeeze 신호 차단")
+            elif score < MACRO_MIN_CHANGE_RATE and not short_squeeze:
+                trend = 'bearish'
+                can_trade = False
+            elif score > MACRO_BULLISH_THRESHOLD or (short_squeeze and not long_term_bearish):
                 trend = 'bullish'
                 can_trade = True
             else:
@@ -587,19 +765,26 @@ class MarketAnalyzer:
                 'score': score,
                 'can_trade': can_trade,
                 'm15_change': m15_change,
-                'short_squeeze': short_squeeze
+                'h4_change': h4_change,
+                'daily_change': daily_change,
+                'daily_3d_change': daily_3d_change,
+                'short_squeeze': short_squeeze,
+                'long_term_bearish': long_term_bearish,
+                'block_reason': block_reason
             }
             
-            log_msg = f"[{self.market}] 📊 추세 분석 | {trend} | 15m:{m15_change*100:+.2f}% 1h:{h1_change*100:+.2f}% 일:{daily_change*100:+.2f}%"
-            if short_squeeze:
-                log_msg += " | 🔥 단기 수급 폭발(Short Squeeze) 감지"
+            log_msg = f"[{self.market}] 📊 추세 분석 | {trend} | 15m:{m15_change*100:+.2f}% 4h:{h4_change*100:+.2f}% 일:{daily_change*100:+.2f}% 3일:{daily_3d_change*100:+.2f}%"
+            if long_term_bearish:
+                log_msg += f" | 🚫 장기하락 차단"
+            elif short_squeeze:
+                log_msg += " | 🔥 Short Squeeze"
             logger.info(log_msg)
             
             return result
             
         except Exception as e:
             logger.error(f"거시 분석 오류: {e}")
-            return {'trend': 'neutral', 'score': 0, 'can_trade': True}
+            return {'trend': 'neutral', 'score': 0, 'can_trade': True, 'long_term_bearish': False}
     
     def update_candles(self, candles: List[Dict]):
         """1분봉 데이터 업데이트"""
@@ -943,12 +1128,13 @@ class MarketAnalyzer:
         return analysis
     
     def analyze_multi_timeframe(self, current_price: float) -> Dict:
-        """다중 타임프레임 분석 - 5분봉/15분봉으로 진입 타이밍 검증
+        """다중 타임프레임 분석 - 5분봉/15분봉으로 진입 타이밍 검증 (v3.2 강화)
         
         핵심 목표:
-        1. 상승 '초기' 단계인지 확인 (고점 추격 방지)
-        2. 중기 추세(15분봉)가 하락이 아닌지 확인
-        3. 5분봉 거래량을 통해 수급 확인
+        1. 거시 추세(일봉/4시간봉) 하락 시 무조건 차단 (v3.2 추가)
+        2. 상승 '초기' 단계인지 확인 (고점 추격 방지)
+        3. 중기 추세(15분봉)가 하락이 아닌지 확인
+        4. 5분봉 거래량을 통해 수급 확인
         """
         result = {
             'valid_entry': True,  # 진입 허용 여부
@@ -965,6 +1151,12 @@ class MarketAnalyzer:
         # MTF 비활성화 시 항상 허용
         if not MTF_ENABLED:
             result['reasons'].append("MTF 분석 비활성화")
+            return result
+        
+        # === [v3.2] 거시 추세 하락 시 무조건 차단 ===
+        if self.macro_trend == 'bearish':
+            result['valid_entry'] = False
+            result['warnings'].append("🚫 거시 추세 하락 (일봉/4시간봉) - 진입 차단")
             return result
         
         # === 1. 5분봉 분석 ===
@@ -1314,7 +1506,6 @@ class MarketAnalyzer:
                         reasons.append(f"🚫 15분봉 하락추세")
         
         # === 3단계: 최소 신호 강도 체크 (v3.1 추가) ===
-        MIN_SIGNAL_STRENGTH = 60
         if combined_signal and combined_strength < MIN_SIGNAL_STRENGTH:
             combined_signal = False
             mtf_blocked = True
@@ -1342,20 +1533,6 @@ class MomentumTrader:
         self.access_key = ACCESS_KEY
         self.secret_key = SECRET_KEY
         self.api = UpbitAPI(ACCESS_KEY, SECRET_KEY)
-        
-        # Redis 초기화
-        try:
-            self.redis = redis.Redis(host='localhost', port=6379, db=0, password=REDIS_PASSWORD, decode_responses=True)
-            self.redis.ping()
-            logger.info("✅ Redis 연결 성공")
-            
-            # Redis Log Handler 추가
-            redis_handler = RedisLogHandler(self.redis)
-            redis_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
-            logging.getLogger().addHandler(redis_handler)
-        except Exception as e:
-            logger.error(f"Redis 연결 실패: {e}")
-            self.redis = None
         
         # 동적 관리
         self.markets = []  
@@ -1451,20 +1628,18 @@ class MomentumTrader:
                             candles = self.api.get_candles_minutes(market, CANDLE_UNIT, 200)
                             self.analyzers[market].update_candles(candles)
                             
-                            # 5분봉 로드
-                            candles_5m = self.api.get_candles_minutes(market, 5, 100)
-                            self.analyzers[market].update_candles_5m(candles_5m)
+                            # 5분봉 스마트 로드 (600개)
+                            self.analyzers[market].initialize_candles_smart(5, 600, self.analyzers[market].minute5_candles)
                             
-                            # 15분봉 로드
-                            candles_15m = self.api.get_candles_minutes(market, 15, 50)
-                            self.analyzers[market].update_candles_15m(candles_15m)
+                            # 15분봉 스마트 로드 (400개)
+                            self.analyzers[market].initialize_candles_smart(15, 400, self.analyzers[market].minute15_candles)
                             
                             # 초봉 로드
                             sec_candles = self.api.get_candles_seconds(market, 120)
                             self.analyzers[market].update_second_candles(sec_candles)
                             
                             self.last_price_updates[market] = None
-                            logger.info(f"[{market}] 초기 데이터 로드 완료 (1분:{len(candles)} 5분:{len(candles_5m)} 15분:{len(candles_15m)} 초:{len(sec_candles)})")
+                            logger.info(f"[{market}] 초기 데이터 로드 완료 (1분:{len(candles)} 5분:{len(self.analyzers[market].minute5_candles)} 15분:{len(self.analyzers[market].minute15_candles)} 초:{len(sec_candles)})")
                             
                         except Exception as e:
                             logger.error(f"[{market}] 초기 데이터 로딩 실패: {e}")
@@ -1525,20 +1700,18 @@ class MomentumTrader:
                         candles = self.api.get_candles_minutes(market, CANDLE_UNIT, 200)
                         self.analyzers[market].update_candles(candles)
                         
-                        # 5분봉 로드
-                        candles_5m = self.api.get_candles_minutes(market, 5, 100)
-                        self.analyzers[market].update_candles_5m(candles_5m)
+                        # 5분봉 스마트 로드 (600개)
+                        self.analyzers[market].initialize_candles_smart(5, 600, self.analyzers[market].minute5_candles)
                         
-                        # 15분봉 로드
-                        candles_15m = self.api.get_candles_minutes(market, 15, 50)
-                        self.analyzers[market].update_candles_15m(candles_15m)
+                        # 15분봉 스마트 로드 (400개)
+                        self.analyzers[market].initialize_candles_smart(15, 400, self.analyzers[market].minute15_candles)
                         
                         # 초봉 로드
                         sec_candles = self.api.get_candles_seconds(market, 120)
                         self.analyzers[market].update_second_candles(sec_candles)
                         
                         self.last_price_updates[market] = None
-                        logger.info(f"[{market}] 초기 데이터 로드 완료")
+                        logger.info(f"[{market}] 초기 데이터 로드 완료 (5분:{len(self.analyzers[market].minute5_candles)} 15분:{len(self.analyzers[market].minute15_candles)})")
                         
                     except Exception as e:
                         logger.error(f"[{market}] 초기 데이터 로딩 실패: {e}")
@@ -1665,71 +1838,7 @@ class MomentumTrader:
             except Exception as e:
                 logger.error(f"리포트 루프 오류: {e}")
     
-    def _update_redis_ticker(self, market: str, price: float):
-        """Redis에 시세 정보 업데이트"""
-        if not self.redis: return
-        try:
-            key = f"[MON]:TICKER:{market}"
-            mapping = {
-                "price": str(price),
-                "timestamp": str(datetime.now())
-            }
-            # 마켓 분석 정보도 함께
-            if market in self.analyzers:
-                an = self.analyzers[market]
-                
-                # m1_change
-                m1_change = 0.0
-                if an.minute_candles:
-                    last_c = an.minute_candles[-1]
-                    op = last_c.get('opening_price', 0)
-                    if op > 0: m1_change = (price - op) / op * 100
-                
-                # buy_ratio
-                buy_ratio = 50.0
-                vol = an.bid_volume_1m + an.ask_volume_1m
-                if vol > 0: buy_ratio = an.bid_volume_1m / vol * 100
-                
-                mapping.update({
-                    "rsi": f"{an.rsi_value:.1f}",
-                    "fatigue": f"{an.fatigue_score:.1f}",
-                    "sentiment": an.market_sentiment,
-                    "m1_change": f"{m1_change:.2f}",
-                    "buy_ratio": f"{buy_ratio:.1f}"
-                })
-            
-            self.redis.hset(key, mapping=mapping)
-        except Exception: pass
 
-    def _update_redis_status(self):
-        """Redis에 봇 상태 및 자산 정보 업데이트"""
-        if not self.redis: return
-        try:
-            # 1. 자산 정보
-            assets_json = json.dumps(self.assets)
-            self.redis.set("[MON]:ASSETS", assets_json)
-            
-            # 2. 보유 종목 상태
-            positions = {}
-            for market, state in self.states.items():
-                if state.has_position():
-                    positions[market] = {
-                        'entry_price': state.entry_price,
-                        'current_price': self.current_prices.get(market, 0),
-                        'profit_rate': (self.current_prices.get(market, 0) - state.entry_price) / state.entry_price * 100 if state.entry_price > 0 else 0,
-                        'volume': state.position.get('volume', 0)
-                    }
-            self.redis.set("[MON]:POSITIONS", json.dumps(positions))
-            
-            # 3. 누적 수익
-            summary = {
-                'profit': self.cumulative_profit,
-                'trades': self.cumulative_trades,
-                'wins': self.cumulative_wins
-            }
-            self.redis.set("[MON]:SUMMARY", json.dumps(summary))
-            
-        except Exception: pass
 
     def _check_balance(self):
         """잔고 확인 (WebSocket 데이터 기반)"""
@@ -1783,9 +1892,6 @@ class MomentumTrader:
                           f"평가: {Color.YELLOW}{valuation:,.0f}원{Color.RESET} ({pnl_color}{profit_rate:+.2f}%{Color.RESET})")
                           
             logger.info(f"💵 총 자산 추정: {Color.YELLOW}{self.assets.get('KRW', {}).get('balance', 0) + total_valuation:,.0f}원{Color.RESET}")
-            
-            # Redis 업데이트
-            self._update_redis_status()
             
         except Exception as e:
             logger.error(f"잔고 확인 실패: {e}")
@@ -1848,21 +1954,17 @@ class MomentumTrader:
                                 if type_val == 'ticker':
                                     self.current_prices[code] = data.get('trade_price') or data.get('tp')
                                     self.last_price_updates[code] = datetime.now()
-                                    self._update_redis_ticker(code, self.current_prices[code])
                                     
                                 elif type_val == 'trade':
                                     # 체결 데이터 - 가격 업데이트 + 매수/매도 세력 분석
                                     self.current_prices[code] = data.get('trade_price') or data.get('tp', self.current_prices.get(code, 0))
                                     self.last_price_updates[code] = datetime.now()
-                                    self._update_redis_ticker(code, self.current_prices[code])
                                     # 체결 데이터를 Analyzer에 전달 (매수/매도 분석용)
                                     self.analyzers[code].update_trade_from_ws(data)
                                     
                                 elif type_val == 'orderbook':
                                     # 호가 데이터 - 매수벽/매도벽 분석
                                     self.analyzers[code].update_orderbook_from_ws(data)
-                                    if self.redis:
-                                        self.redis.set(f"[MON]:ORDERBOOK:{code}", json.dumps(data))
                                 
                                 elif type_val.startswith('candle.'):
                                     # 캔들 데이터 (1s, 1m, 5m, 15m 등)
@@ -2045,7 +2147,18 @@ class MomentumTrader:
             await asyncio.sleep(MACRO_UPDATE_INTERVAL)
             try:
                 for market in self.markets:
-                    self.analyzers[market].analyze_macro()
+                    if market in self.analyzers:
+                        # 거시 분석
+                        self.analyzers[market].analyze_macro()
+                        
+                        # 데이터 저장 (5분, 15분)
+                        # v3.3: 600개 이상 데이터 파일 저장으로 초기 로딩 속도 향상
+                        an = self.analyzers[market]
+                        if an.minute5_candles:
+                            an.save_candles_to_disk(5, an.minute5_candles)
+                        if an.minute15_candles:
+                            an.save_candles_to_disk(15, an.minute15_candles)
+                            
                     await asyncio.sleep(1.0) # 마켓 간 딜레이
             except Exception as e:
                 logger.error(f"거시 분석 업데이트 오류: {e}")
@@ -2148,6 +2261,12 @@ class MomentumTrader:
     
     async def _execute_buy(self, market: str):
         """매수 실행"""
+        state = self.states[market]
+        # 중복 주문 방지 Lock
+        if state.processing_order or state.has_position():
+            return
+
+        state.processing_order = True
         try:
             # 사용 가능 금액 확인 (Memory Cache 사용)
             krw_balance = self.assets.get('KRW', {'balance': 0})['balance']
@@ -2259,6 +2378,8 @@ class MomentumTrader:
                 
         except Exception as e:
             logger.error(f"[{market}] 매수 실행 오류: {e}")
+        finally:
+            state.processing_order = False
     
     async def _manage_position(self, market: str):
         """포지션 관리 (익절/손절 판단) - 개선된 버전"""
