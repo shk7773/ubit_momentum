@@ -311,7 +311,7 @@ class MarketAnalyzer:
                     long_term_bearish = True
                     block_reason = block_reason or f"4시간봉 하락 ({h4_change*100:.2f}%)"
             elif strong_short_momentum and LONG_TERM_FILTER_ENABLED:
-                logger.info(f"[{self.market}] 🚀 단기 급등 감지 (5m:{m5_change*100:+.2f}% 1m일관:{m1_consistency_count}/3 4h:{h4_change*100:+.2f}% 매수:{buy_pressure*100:.1f}% 피로:{self.fatigue_score:.1f}) - 장기하락 차단 예외 적용")
+                logger.info(f"[{self.market}] 단기 급등 감지 (5m:{m5_change*100:+.2f}% 1m일관:{m1_consistency_count}/3 4h:{h4_change*100:+.2f}% 매수:{buy_pressure*100:.1f}% 피로:{self.fatigue_score:.1f}) - 장기하락 차단 예외 적용")
             
             score = m15_change * 0.20 + m30_change * 0.15 + h1_change * 0.20 + h4_change * 0.25 + daily_change * 0.20
             
@@ -321,7 +321,7 @@ class MarketAnalyzer:
                 trend = 'bearish'
                 can_trade = False
                 if short_squeeze and IGNORE_SHORT_SQUEEZE_IN_DOWNTREND:
-                    logger.warning(f"[{self.market}] 🚫 하락장 반등 무시 | {block_reason} | Short Squeeze 신호 차단")
+                    logger.warning(f"[{self.market}] 하락장 반등 무시 | {block_reason} | Short Squeeze 신호 차단")
             elif score < MACRO_MIN_CHANGE_RATE and not short_squeeze:
                 trend = 'bearish'
                 can_trade = False
@@ -355,25 +355,19 @@ class MarketAnalyzer:
             }
             self.macro_result = result
             
-            m5_color = Color.RED if m5_change >= 0 else Color.BLUE
-            m15_color = Color.RED if m15_change >= 0 else Color.BLUE
-            h4_color = Color.RED if h4_change >= 0 else Color.BLUE
-            d_color = Color.RED if daily_change >= 0 else Color.BLUE
-            d3_color = Color.RED if daily_3d_change >= 0 else Color.BLUE
-
-            log_msg = (f"[{self.market:<11}] 📊 추세 분석 | {trend:<7} | "
-                      f"5m:{m5_color}{m5_change*100:>+6.2f}%{Color.RESET} "
-                      f"15m:{m15_color}{m15_change*100:>+6.2f}%{Color.RESET} "
-                      f"4h:{h4_color}{h4_change*100:>+6.2f}%{Color.RESET} "
-                      f"일:{d_color}{daily_change*100:>+6.2f}%{Color.RESET} "
-                      f"3일:{d3_color}{daily_3d_change*100:>+6.2f}%{Color.RESET}")
+            log_msg = (f"[{self.market:<11}] 추세 분석 | {trend:<7} | "
+                      f"5m:{m5_change*100:>+6.2f}% "
+                      f"15m:{m15_change*100:>+6.2f}% "
+                      f"4h:{h4_change*100:>+6.2f}% "
+                      f"일:{daily_change*100:>+6.2f}% "
+                      f"3일:{daily_3d_change*100:>+6.2f}%")
 
             if long_term_bearish:
-                log_msg += f" | 🚫 장기하락 차단"
+                log_msg += f" | 장기하락 차단"
             elif strong_short_momentum:
-                log_msg += f" | 🚀 단기 급등 (예외 허용, 1m일관:{m1_consistency_count}/3, 매수:{buy_pressure*100:.0f}%)"
+                log_msg += f" | 단기 급등 (예외 허용, 1m일관:{m1_consistency_count}/3, 매수:{buy_pressure*100:.0f}%)"
             elif short_squeeze:
-                log_msg += " | 🔥 Short Squeeze"
+                log_msg += " | Short Squeeze"
             logger.info(log_msg)
             
             return result
@@ -656,7 +650,7 @@ class MarketAnalyzer:
             analysis['warnings'].append(f"🚨 극심한 과매수 (RSI:{self.rsi_value:.1f})")
         elif self.rsi_value >= 70:
             score -= 10
-            analysis['warnings'].append(f"⚠️ 과매수 구간 (RSI:{self.rsi_value:.1f})")
+            analysis['warnings'].append(f"과매수 구간 (RSI:{self.rsi_value:.1f})")
         elif self.rsi_value <= 20:
             score += 15
             analysis['reasons'].append(f"과매도 반등 가능 (RSI:{self.rsi_value:.1f})")
@@ -666,14 +660,14 @@ class MarketAnalyzer:
         
         if self.fatigue_score >= 60:
             score -= 25
-            analysis['warnings'].append(f"🔥 급등 피로도 높음 ({self.fatigue_score:.1f}) - 조정 가능성")
+            analysis['warnings'].append(f"급등 피로도 높음 ({self.fatigue_score:.1f}) - 조정 가능성")
         elif self.fatigue_score >= 40:
             score -= 12
             analysis['warnings'].append(f"급등 피로감 ({self.fatigue_score:.1f})")
         
         if self.momentum_exhaustion:
             score -= 15
-            analysis['warnings'].append("📉 모멘텀 소진 - 거래량 급감")
+            analysis['warnings'].append("모멘텀 소진 - 거래량 급감")
         
         if self.volatility >= 0.02:
             score -= 5
@@ -714,7 +708,7 @@ class MarketAnalyzer:
         
         if self.macro_trend == 'bearish':
             result['valid_entry'] = False
-            result['warnings'].append("🚫 거시 추세 하락 (일봉/4시간봉) - 진입 차단")
+            result['warnings'].append("거시 추세 하락 (일봉/4시간봉) - 진입 차단")
             return result
         
         # 1. 5분봉 분석
@@ -750,14 +744,14 @@ class MarketAnalyzer:
                 
                 if disparity < -0.015:
                     if is_bullish_candle and is_volume_spike:
-                        result['reasons'].append(f"📉 낙폭과대+거래량실린반등 (이격:{disparity*100:.1f}%)")
+                        result['reasons'].append(f"낙폭과대+거래량실린반등 (이격:{disparity*100:.1f}%)")
                     elif is_bullish_candle:
-                         result['warnings'].append(f"⚠️ 거래량 부족한 반등 (이격:{disparity*100:.1f}%)")
+                         result['warnings'].append(f"거래량 부족한 반등 (이격:{disparity*100:.1f}%)")
                     else:
-                         result['warnings'].append(f"⚠️ 하락가속화 (이격:{disparity*100:.1f}%)")
+                         result['warnings'].append(f"하락가속화 (이격:{disparity*100:.1f}%)")
                 else:
                     result['valid_entry'] = False
-                    result['warnings'].append(f"🚫 하락추세 진행중 (이격부족:{disparity*100:.1f}%)")
+                    result['warnings'].append(f"하락추세 진행중 (이격부족:{disparity*100:.1f}%)")
             
             elif ma15 > 0 and ma50 > 0:
                 if disparity < 0:
@@ -785,7 +779,7 @@ class MarketAnalyzer:
             
             if change_5m >= MTF_5M_EARLY_STAGE_MAX:
                 result['stage'] = 'late'
-                result['warnings'].append(f"⚠️ 상승 후반 ({change_5m*100:.2f}%) - 고점 추격 위험")
+                result['warnings'].append(f"상승 후반 ({change_5m*100:.2f}%) - 고점 추격 위험")
                 result['valid_entry'] = False
             elif change_5m >= MTF_5M_TREND_THRESHOLD:
                 if change_5m <= 0.008:
@@ -820,7 +814,7 @@ class MarketAnalyzer:
                 result['reasons'].append(f"15분봉 상승 ({change_15m*100:.2f}%)")
             elif change_15m <= -MTF_15M_TREND_THRESHOLD:
                 result['trend_15m'] = 'bearish'
-                result['warnings'].append(f"🚫 15분봉 하락 ({change_15m*100:.2f}%)")
+                result['warnings'].append(f"15분봉 하락 ({change_15m*100:.2f}%)")
                 if MTF_STRICT_MODE:
                     result['valid_entry'] = False
             else:
@@ -837,7 +831,7 @@ class MarketAnalyzer:
                 result['warnings'].append(f"최근 5분봉 {down_count}개 음봉")
                 if down_count == 3:
                     result['valid_entry'] = False
-                    result['warnings'].append("🚫 3연속 음봉 - 진입 차단")
+                    result['warnings'].append("3연속 음봉 - 진입 차단")
         
         return result
 
@@ -941,7 +935,7 @@ class MarketAnalyzer:
         
         reason = []
         if sec_momentum_ok: reason.append(f"초봉모멘텀 {sec_price_change*100:.3f}%")
-        if rapid_rise: reason.append(f"🚀급등 {rapid_change*100:.3f}%")
+        if rapid_rise: reason.append(f"급등 {rapid_change*100:.3f}%")
         if sec_volume_ok: reason.append(f"초봉거래량 {sec_volume_ratio:.1f}배")
         if sec_up_count >= 3: reason.append(f"연속상승초 {sec_up_count}개")
         
@@ -978,7 +972,7 @@ class MarketAnalyzer:
                 'signal': False, 'strength': 0, 'minute_signal': minute_result['signal'],
                 'second_signal': second_result.get('signal', False), 'rapid_rise': second_result.get('rapid_rise', False),
                 'mtf_valid': mtf_result['valid_entry'], 'mtf_stage': mtf_result.get('stage', 'unknown'),
-                'mtf_blocked': True, 'reason': f'🚫 호가불균형 차단 (매도우위:{orderbook_imbalance:.2f})'
+                'mtf_blocked': True, 'reason': f'호가불균형 차단 (매도우위:{orderbook_imbalance:.2f})'
             }
         
         if minute_result['signal'] and second_result.get('signal', False):
@@ -998,7 +992,7 @@ class MarketAnalyzer:
             elif has_minute_support:
                 combined_signal = True
                 combined_strength = second_result['strength'] * 0.5
-                reasons.append(f"⚠️ 약한진입: {second_result['reason']} (MTF 미확인)")
+                reasons.append(f"약한진입: {second_result['reason']} (MTF 미확인)")
                 
         elif minute_result['signal']:
             combined_signal = True
@@ -1021,7 +1015,7 @@ class MarketAnalyzer:
             if mtf_result.get('trend_5m') == 'bearish':
                 combined_signal = False
                 mtf_blocked = True
-                reasons.append(f"🚫 5분봉 하락추세 ({mtf_result.get('change_5m',0)*100:.2f}%)")
+                reasons.append(f"5분봉 하락추세 ({mtf_result.get('change_5m',0)*100:.2f}%)")
             
             elif len(self.minute5_candles) >= 3:
                 recent_5m_changes = []
@@ -1038,17 +1032,17 @@ class MarketAnalyzer:
                     if prev_momentum > 0.003 and last_momentum < prev_momentum * 0.5:
                         combined_signal = False
                         mtf_blocked = True
-                        reasons.append(f"🚫 5분봉 모멘텀 약화 ({prev_momentum*100:.2f}% → {last_momentum*100:.2f}%)")
+                        reasons.append(f"5분봉 모멘텀 약화 ({prev_momentum*100:.2f}% → {last_momentum*100:.2f}%)")
             
             elif minute_result.get('price_change', 0) >= MTF_MAX_1M_CHANGE:
                 combined_signal = False
                 mtf_blocked = True
-                reasons.append(f"🚫 1분봉 과도한 급등 ({minute_result.get('price_change',0)*100:.2f}%) - 고점 위험")
+                reasons.append(f"1분봉 과도한 급등 ({minute_result.get('price_change',0)*100:.2f}%) - 고점 위험")
             
             elif not mtf_result['valid_entry']:
                 combined_signal = False
                 mtf_blocked = True
-                reasons.append(f"🚫 MTF 차단: {' | '.join(mtf_result['warnings'])}")
+                reasons.append(f"MTF 차단: {' | '.join(mtf_result['warnings'])}")
             else:
                 stage = mtf_result.get('stage', 'unknown')
                 if (stage == 'neutral' or stage == 'unknown') and combined_strength < 80:
@@ -1063,13 +1057,13 @@ class MarketAnalyzer:
                     if combined_strength < 90:
                         combined_signal = False
                         mtf_blocked = True
-                        reasons.append(f"🚫 상승중반 강도부족 ({combined_strength:.1f}<90) - 타이밍 늦음")
+                        reasons.append(f"상승중반 강도부족 ({combined_strength:.1f}<90) - 타이밍 늦음")
                     else:
                         reasons.append(f"📈 상승중반")
                 elif stage == 'late':
                     combined_signal = False
                     mtf_blocked = True
-                    reasons.append(f"🚫 상승후반 - 진입차단")
+                    reasons.append(f"상승후반 - 진입차단")
                 
                 if combined_signal:
                     if mtf_result['volume_confirmed']:
@@ -1081,12 +1075,12 @@ class MarketAnalyzer:
                         if MTF_STRICT_MODE:
                             combined_signal = False
                             mtf_blocked = True
-                            reasons.append(f"🚫 15분봉 하락추세")
+                            reasons.append(f"15분봉 하락추세")
         
         if combined_signal and combined_strength < MIN_SIGNAL_STRENGTH:
             combined_signal = False
             mtf_blocked = True
-            reasons.append(f"🚫 최소 강도 미달 ({combined_strength:.0f}<{MIN_SIGNAL_STRENGTH})")
+            reasons.append(f"최소 강도 미달 ({combined_strength:.0f}<{MIN_SIGNAL_STRENGTH})")
         
         return {
             'signal': combined_signal,

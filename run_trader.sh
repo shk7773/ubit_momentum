@@ -18,4 +18,4 @@ echo "   Ctrl+C로 종료할 수 있습니다."
 echo ""
 
 # unbuffered 모드(-u)로 실행하여 로그 실시간 기록 + tee로 화면/파일 동시 출력
-python -u momentum_trader.py 2>&1 | tee "$LOG_FILE"
+python -u main.py 2>&1 | tee "$LOG_FILE"
