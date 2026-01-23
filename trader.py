@@ -198,6 +198,12 @@ class MomentumTrader:
                             self.analyzers[market].initialize_candles_smart(15, 400, self.analyzers[market].minute15_candles)
                             
                             await asyncio.sleep(0)  # 이벤트 루프 양보
+                            self.analyzers[market].initialize_candles_smart(30, 200, self.analyzers[market].minute30_candles)
+                            
+                            await asyncio.sleep(0)  # 이벤트 루프 양보
+                            self.analyzers[market].initialize_candles_smart(60, 200, self.analyzers[market].hour1_candles)
+                            
+                            await asyncio.sleep(0)  # 이벤트 루프 양보
                             sec_candles = self.api.get_candles_seconds(market, 120)
                             await asyncio.sleep(0)  # 이벤트 루프 양보
                             self.analyzers[market].update_second_candles(sec_candles)
@@ -352,6 +358,57 @@ class MomentumTrader:
         
         await run_app_with_init()
 
+    def _print_market_status(self, market: str, show_header: bool = False):
+        """가격과 추세 정보를 한 줄로 출력하는 공통 함수"""
+        if market not in self.current_prices or market not in self.analyzers:
+            return
+        
+        price = self.current_prices[market]
+        analyzer = self.analyzers[market]
+        
+        # 추세 분석 실행 (로그 출력 없이)
+        analyzer.analyze_macro(silent=True)
+        res = analyzer.macro_result or {}
+        trend = analyzer.macro_trend
+        trend_emoji = "🔴" if trend == 'bearish' else "🟢" if trend == 'bullish' else "🟡"
+        
+        # 1분봉 변화율
+        m1_change_display = 0.0
+        if len(analyzer.minute_candles) >= 2:
+            m1_start = analyzer.minute_candles[-2]['trade_price']
+            m1_curr = analyzer.minute_candles[-1]['trade_price']
+            m1_change_display = (m1_curr - m1_start) / m1_start * 100
+        
+        # 5분봉 변화율
+        m5_change_display = res.get('m5_change', 0) * 100
+        # 15분봉 변화율
+        m15_change_display = res.get('m15_change', 0) * 100
+        # 30분봉 변화율
+        m30_change_display = res.get('m30_change', 0) * 100
+        # 1시간봉 변화율
+        h1_change_display = res.get('h1_change', 0) * 100
+        # 4시간봉 변화율
+        h4_change_display = res.get('h4_change', 0) * 100
+        
+        # 시장 심리 분석 (RSI, 피로도만 사용, sentiment는 제거)
+        sentiment = analyzer.analyze_market_sentiment()
+        rsi = sentiment.get('rsi', 50)
+        fatigue = sentiment.get('fatigue', 0)
+        
+        # 매수/매도 비율
+        total_vol = analyzer.bid_volume_1m + analyzer.ask_volume_1m
+        buy_ratio = analyzer.bid_volume_1m / total_vol * 100 if total_vol > 0 else 50
+        
+        # 통합 출력: 가격 | 변화율 | 추세 | RSI/피로도/매수비율
+        if show_header and market == self.markets[0]:
+            logger.info("------------------------------------")
+        
+        logger.info(f"[{market:<11}] {price:>11,.0f} | "
+                   f"{m1_change_display:>+6.2f}% {m5_change_display:>+6.2f}% {m15_change_display:>+6.2f}% {m30_change_display:>+6.2f}% {h1_change_display:>+6.2f}% {h4_change_display:>+6.2f}% | "
+                   f"RSI:{rsi:>3.0f} 피로:{fatigue:>3.0f} | "
+                   f"매수:{buy_ratio:>3.0f}% | "
+                   f"{trend_emoji}")
+
     async def process_user_command(self, cmd_line: str):
         """사용자 명령어 처리"""
         try:
@@ -382,8 +439,7 @@ class MomentumTrader:
                 logger.info("/buy <종목> <금액> : 시장가 매수")
                 logger.info("/sell <종목>        : 시장가 전량 매도")
                 logger.info("/status, /my      : 보유 자산 및 수익 현황")
-                logger.info("/price <종목>     : 현재가 조회")
-                logger.info("/trend <종목>     : 추세 분석 결과 조회")
+                logger.info("/price, /trend    : 가격 및 추세 정보 조회 (통합)")
                 logger.info("/stoploss <종목> <가격> : 손절가 수동 지정")
                 logger.info("/tp <종목> <가격>       : 익절가 수동 지정")
                 logger.info("/clear            : 화면 지우기")
@@ -584,93 +640,21 @@ class MomentumTrader:
                     await self._execute_sell(market, "사용자 강제 청산")
                 return
 
-            if cmd == '/trend':
+            if cmd in ['/trend', '/price']:
+                # /trend와 /price 명령 통합
                 if len(parts) >= 2:
-                    # 특정 종목 추세 조회
+                    # 특정 종목 조회
                     coin = parts[1].upper().replace('KRW-', '')
                     market = f"KRW-{coin}"
-                    if market in self.analyzers:
-                        self.analyzers[market].analyze_macro()
-                        res = self.analyzers[market].macro_result or {}
-                        trend = self.analyzers[market].macro_trend
-                        logger.info(f"{market} 추세: {trend}")
-                        logger.info(f"   변화율: 5m({res.get('m5_change',0)*100:+.2f}%) 15m({res.get('m15_change',0)*100:+.2f}%)")
+                    if market not in self.current_prices or market not in self.analyzers:
+                        logger.warning(f"데이터 없음: {market}")
                     else:
-                        logger.warning(f"분석 데이터 없음: {market}")
+                        self._print_market_status(market)
                 else:
-                    # 전체 종목 추세 조회
-                    logger.info("전체 종목 추세 분석")
+                    # 전체 종목 조회
+                    logger.info("전체 종목 가격 및 추세 정보")
                     for market in self.markets:
-                        if market not in self.analyzers:
-                            continue
-                        analyzer = self.analyzers[market]
-                        analyzer.analyze_macro()
-                        res = analyzer.macro_result or {}
-                        trend = analyzer.macro_trend
-                        m5_change = res.get('m5_change', 0) * 100
-                        m15_change = res.get('m15_change', 0) * 100
-                        logger.info(f"   [{market:<11}] {trend:<7} | 5m:{m5_change:+6.2f}% 15m:{m15_change:+6.2f}%")
-                return
-            
-            if cmd == '/price':
-                if len(parts) >= 2:
-                    # 특정 종목 가격 조회
-                    coin = parts[1].upper().replace('KRW-', '')
-                    market = f"KRW-{coin}"
-                    if market in self.current_prices:
-                        logger.info(f"{market}: {self.current_prices[market]:,.0f}원")
-                    else:
-                        logger.warning(f"가격 데이터 없음: {market}")
-                else:
-                    # 전체 종목 가격 정보 조회
-                    logger.info("전체 종목 가격 정보")
-                    for market in self.markets:
-                        if market not in self.current_prices or market not in self.analyzers:
-                            continue
-                        
-                        price = self.current_prices[market]
-                        analyzer = self.analyzers[market]
-                        
-                        # 1분봉 변화율
-                        m1_change_display = 0.0
-                        if len(analyzer.minute_candles) >= 2:
-                            m1_start = analyzer.minute_candles[-2]['trade_price']
-                            m1_curr = analyzer.minute_candles[-1]['trade_price']
-                            m1_change_display = (m1_curr - m1_start) / m1_start * 100
-                        
-                        # 5분봉 변화율
-                        m5_change_display = 0.0
-                        if len(analyzer.minute5_candles) >= 2:
-                            m5_start = analyzer.minute5_candles[-2]['trade_price']
-                            m5_curr = analyzer.minute5_candles[-1]['trade_price']
-                            m5_change_display = (m5_curr - m5_start) / m5_start * 100
-                        
-                        # 15분봉 변화율
-                        m15_change_display = 0.0
-                        if len(analyzer.minute15_candles) >= 2:
-                            m15_start = analyzer.minute15_candles[-2]['trade_price']
-                            m15_curr = analyzer.minute15_candles[-1]['trade_price']
-                            m15_change_display = (m15_curr - m15_start) / m15_start * 100
-                        
-                        # 시장 심리 분석
-                        sentiment = analyzer.analyze_market_sentiment()
-                        sentiment_text = sentiment['sentiment']
-                        rsi = sentiment.get('rsi', 50)
-                        fatigue = sentiment.get('fatigue', 0)
-                        
-                        # 매수/매도 비율
-                        total_vol = analyzer.bid_volume_1m + analyzer.ask_volume_1m
-                        buy_ratio = analyzer.bid_volume_1m / total_vol * 100 if total_vol > 0 else 50
-                        
-                        # 변화율 표시 (상승: +, 하락: -)
-                        if market == self.markets[0]:
-                            logger.info("------------------------------------")
-                        logger.info(f"[{market:<11}] {price:>11,.0f}원 | "
-                                  f"1m:{m1_change_display:>6.2f}% "
-                                  f"5m:{m5_change_display:>6.2f}% "
-                                  f"15m:{m15_change_display:>6.2f}% | "
-                                  f"RSI:{rsi:>3.0f} 피로:{fatigue:>3.0f} | "
-                                  f"매수:{buy_ratio:>3.0f}% | {sentiment_text:<7}")
+                        self._print_market_status(market, show_header=True)
                 return
 
         except Exception as e:
@@ -887,6 +871,8 @@ class MomentumTrader:
                         {"type": "candle.1m", "codes": codes},
                         {"type": "candle.5m", "codes": codes},
                         {"type": "candle.15m", "codes": codes},
+                        {"type": "candle.30m", "codes": codes},
+                        {"type": "candle.60m", "codes": codes},
                         {"format": "DEFAULT"}
                     ]
                     await ws.send(json.dumps(subscribe))
@@ -1004,56 +990,11 @@ class MomentumTrader:
                     else:
                         await self._find_entry(market)
                 
-                # 로그 출력 (15초마다)
+                # 로그 출력 (15초마다) - 가격과 추세 정보 통합 출력
                 if time.time() - last_status_log >= 15:
                     last_status_log = time.time()
                     for market in self.markets:
-                        if market not in self.current_prices or market not in self.analyzers:
-                            continue
-                        
-                        price = self.current_prices[market]
-                        analyzer = self.analyzers[market]
-                        
-                        # 1분봉 변화율
-                        m1_change_display = 0.0
-                        if len(analyzer.minute_candles) >= 2:
-                            m1_start = analyzer.minute_candles[-2]['trade_price']
-                            m1_curr = analyzer.minute_candles[-1]['trade_price']
-                            m1_change_display = (m1_curr - m1_start) / m1_start * 100
-                        
-                        # 5분봉 변화율
-                        m5_change_display = 0.0
-                        if len(analyzer.minute5_candles) >= 2:
-                            m5_start = analyzer.minute5_candles[-2]['trade_price']
-                            m5_curr = analyzer.minute5_candles[-1]['trade_price']
-                            m5_change_display = (m5_curr - m5_start) / m5_start * 100
-                        
-                        # 15분봉 변화율
-                        m15_change_display = 0.0
-                        if len(analyzer.minute15_candles) >= 2:
-                            m15_start = analyzer.minute15_candles[-2]['trade_price']
-                            m15_curr = analyzer.minute15_candles[-1]['trade_price']
-                            m15_change_display = (m15_curr - m15_start) / m15_start * 100
-                        
-                        # 시장 심리 분석
-                        sentiment = analyzer.analyze_market_sentiment()
-                        sentiment_text = sentiment['sentiment']
-                        rsi = sentiment.get('rsi', 50)
-                        fatigue = sentiment.get('fatigue', 0)
-                        
-                        # 매수/매도 비율
-                        total_vol = analyzer.bid_volume_1m + analyzer.ask_volume_1m
-                        buy_ratio = analyzer.bid_volume_1m / total_vol * 100 if total_vol > 0 else 50
-                        
-                        # 변화율 표시 (상승: +, 하락: -)
-                        if market == self.markets[0]:
-                            logger.info("------------------------------------")
-                        logger.info(f"[{market:<11}] {price:>11,.0f}원 | "
-                                  f"1m:{m1_change_display:>6.2f}% "
-                                  f"5m:{m5_change_display:>6.2f}% "
-                                  f"15m:{m15_change_display:>6.2f}% | "
-                                  f"RSI:{rsi:>3.0f} 피로:{fatigue:>3.0f} | "
-                                  f"매수:{buy_ratio:>3.0f}% | {sentiment_text:<7}")
+                        self._print_market_status(market, show_header=True)
                 
                 await asyncio.sleep(1)
             except Exception as e:
@@ -1061,11 +1002,13 @@ class MomentumTrader:
                 await asyncio.sleep(5)
 
     async def _macro_update_loop(self):
+        """거시 분석 주기적 업데이트 (로그 출력 없이, 가격/추세 통합 출력에서 처리)"""
         while self.running:
             await asyncio.sleep(MACRO_UPDATE_INTERVAL)
             for market in self.markets:
                 if market in self.analyzers:
-                    self.analyzers[market].analyze_macro()
+                    # silent=True로 호출하여 로그 출력 제거 (가격/추세 통합 출력에서 이미 처리)
+                    self.analyzers[market].analyze_macro(silent=True)
                     # 저장 로직 생략 (Analyzer 내부에서 함)
             await asyncio.sleep(0.01)
 

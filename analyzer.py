@@ -22,6 +22,8 @@ class MarketAnalyzer:
         self.minute_candles = deque(maxlen=200)       # 1분봉 (3시간 20분)
         self.minute5_candles = deque(maxlen=600)      # 5분봉 (50시간 = 약 2일)
         self.minute15_candles = deque(maxlen=400)     # 15분봉 (100시간 = 약 4일)
+        self.minute30_candles = deque(maxlen=200)     # 30분봉 (100시간 = 약 4일)
+        self.hour1_candles = deque(maxlen=200)        # 1시간봉 (200시간 = 약 8일)
         self.second_candles = deque(maxlen=120)       # 초봉 캐시 (최근 2분)
         self.volume_history = deque(maxlen=200)
         self.second_volume_history = deque(maxlen=60)
@@ -181,8 +183,12 @@ class MarketAnalyzer:
             candles = self.api.get_candles_minutes_extended(self.market, unit, max_count)
             deque_obj.extend(candles)
 
-    def analyze_macro(self) -> Dict:
-        """시장 추세 분석"""
+    def analyze_macro(self, silent: bool = False) -> Dict:
+        """시장 추세 분석
+        
+        Args:
+            silent: True이면 로그 출력을 하지 않음 (기본값: False)
+        """
         try:
             # 1. 15분봉 변화율
             m15_change = 0
@@ -191,16 +197,24 @@ class MarketAnalyzer:
                 m15_current = self.minute15_candles[-1]['trade_price']
                 m15_change = (m15_current - m15_start) / m15_start if m15_start > 0 else 0
             
-            # 2. 30분봉 변화율
+            # 2. 30분봉 변화율 (실제 30분봉 캔들 사용)
             m30_change = 0
-            if len(self.minute5_candles) >= 7:
+            if len(self.minute30_candles) >= 2:
+                m30_start = self.minute30_candles[-2]['trade_price']
+                m30_current = self.minute30_candles[-1]['trade_price']
+                m30_change = (m30_current - m30_start) / m30_start if m30_start > 0 else 0
+            elif len(self.minute5_candles) >= 7:  # 폴백: 5분봉으로 근사치 계산
                 m30_start = self.minute5_candles[-7]['trade_price']
                 m30_current = self.minute5_candles[-1]['trade_price']
                 m30_change = (m30_current - m30_start) / m30_start if m30_start > 0 else 0
 
-            # 3. 1시간봉 변화율
+            # 3. 1시간봉 변화율 (실제 1시간봉 캔들 사용)
             h1_change = 0
-            if len(self.minute5_candles) >= 13:
+            if len(self.hour1_candles) >= 2:
+                h1_start = self.hour1_candles[-2]['trade_price']
+                h1_current = self.hour1_candles[-1]['trade_price']
+                h1_change = (h1_current - h1_start) / h1_start if h1_start > 0 else 0
+            elif len(self.minute5_candles) >= 13:  # 폴백: 5분봉으로 근사치 계산
                 h1_start = self.minute5_candles[-13]['trade_price']
                 h1_current = self.minute5_candles[-1]['trade_price']
                 h1_change = (h1_current - h1_start) / h1_start if h1_start > 0 else 0
@@ -343,6 +357,8 @@ class MarketAnalyzer:
                 'm5_change': m5_change,
                 'm1_consistency': m1_consistency_count,
                 'm15_change': m15_change,
+                'm30_change': m30_change,
+                'h1_change': h1_change,
                 'h4_change': h4_change,
                 'daily_change': daily_change,
                 'daily_3d_change': daily_3d_change,
@@ -368,7 +384,9 @@ class MarketAnalyzer:
                 log_msg += f" | 단기 급등 (예외 허용, 1m일관:{m1_consistency_count}/3, 매수:{buy_pressure*100:.0f}%)"
             elif short_squeeze:
                 log_msg += " | Short Squeeze"
-            logger.info(log_msg)
+            
+            if not silent:
+                logger.info(log_msg)
             
             return result
             
@@ -432,6 +450,18 @@ class MarketAnalyzer:
                 self.minute15_candles[-1] = candle
             else:
                 self.minute15_candles.append(candle)
+        
+        elif type_key == 'candle.30m':
+            if self.minute30_candles and self.minute30_candles[-1]['candle_date_time_kst'] == candle['candle_date_time_kst']:
+                self.minute30_candles[-1] = candle
+            else:
+                self.minute30_candles.append(candle)
+        
+        elif type_key == 'candle.60m':
+            if self.hour1_candles and self.hour1_candles[-1]['candle_date_time_kst'] == candle['candle_date_time_kst']:
+                self.hour1_candles[-1] = candle
+            else:
+                self.hour1_candles.append(candle)
                 
         elif type_key == 'candle.1s':
             if self.second_candles and self.second_candles[-1]['candle_date_time_kst'] == candle['candle_date_time_kst']:

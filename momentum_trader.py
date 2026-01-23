@@ -2191,19 +2191,11 @@ class MomentumTrader:
                  if not found:
                       logger.warning(f"감시 중인 종목이 아닙니다: {market}")
                  
-                 if market in self.analyzers:
-                     # 강제 분석 실행
-                     self.analyzers[market].analyze_macro()
-                     res = self.analyzers[market].macro_result
-                     mr = res if res else {}
-                     
-                     trend_emoji = "🔴" if self.analyzers[market].macro_trend == 'bearish' else "🟢" if self.analyzers[market].macro_trend == 'bullish' else "🟡"
-                     
-                     logger.info(f"{market} 추세 분석 결과: {trend_emoji} {self.analyzers[market].macro_trend.upper()}")
-                     logger.info(f"   스코어: {self.analyzers[market].macro_score:.2f}")
-                     logger.info(f"   변화율: 5m({mr.get('m5_change',0)*100:+.2f}%) 15m({mr.get('m15_change',0)*100:+.2f}%) 4h({mr.get('h4_change',0)*100:+.2f}%)")
-                 else:
-                     logger.warning(f"분석 데이터가 없습니다: {market}")
+                if market in self.analyzers:
+                    # 강제 분석 실행 (analyze_macro() 내부에서 이미 로그 출력)
+                    self.analyzers[market].analyze_macro()
+                else:
+                    logger.warning(f"분석 데이터가 없습니다: {market}")
                  return
             if cmd == '/stoploss':
                  # /stoploss BTC 123000
